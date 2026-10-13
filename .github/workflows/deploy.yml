@@ -31,10 +31,10 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install --include=optional
+        run: npm install --legacy-peer-deps --include=dev --include=optional
 
       - name: Build
-        run: npm run build
+        run: npx vite build
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
