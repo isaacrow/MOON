@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -34,7 +34,18 @@ jobs:
         run: npm install --legacy-peer-deps --include=dev --include=optional
 
       - name: Build
-        run: npx vite build
+        run: |
+          npx vite build 2>&1 | tee build.log || {
+            echo "=== BUILD ERROR LOG ==="
+            cat build.log
+            git config user.name "isaacrow"
+            git config user.email "106313576+isaacrow@users.noreply.github.com"
+            cp build.log build_error.txt
+            git add build_error.txt
+            git commit -m "ci: capture build error log"
+            git push origin main
+            exit 1
+          }
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
