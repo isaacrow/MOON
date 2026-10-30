@@ -31,8 +31,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install --legacy-peer-deps --include=dev --include=optional
-          npm install --no-save @rollup/rollup-linux-x64-gnu
+          rm -f package-lock.json
+          npm install --legacy-peer-deps
 
       - name: Build
         run: |
