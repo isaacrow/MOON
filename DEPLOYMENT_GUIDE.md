@@ -1,5 +1,7 @@
 # 🚀 MOON Production Deployment Guide
 
+> **Outdated instructions:** this guide references the removed `/setup-demo` endpoint and should not be followed for deployment. See the current production readiness audit and use Supabase Auth only.
+
 ## Quick Start: 3 Steps to Production
 
 ### Step 1: Set Up Authentication (15 minutes)

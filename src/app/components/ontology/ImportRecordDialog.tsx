@@ -1,11 +1,10 @@
 /**
  * Import Record Dialog
  * 
- * Allows importing BIBFRAME records from XML, RDF, JSON-LD files
+ * Allows importing BIBFRAME records from XML, RDF, JSON-LD files with Liquid Glass Design
  */
 
 import React, { useState } from 'react';
-import { Button } from '../ui/button';
 import { Upload, FileJson, FileCode, FileText, X } from 'lucide-react';
 
 interface ImportRecordDialogProps {
@@ -64,7 +63,6 @@ export function ImportRecordDialog({ isOpen, onClose, onImport }: ImportRecordDi
         
         // Handle different JSON-LD structures
         if (parsed['@graph']) {
-          // Standard BIBFRAME JSON-LD with @graph
           const graph = parsed['@graph'];
           workData = graph.find((item: any) => 
             item['@type']?.includes('bf:Work') || item['@type'] === 'bf:Work'
@@ -73,22 +71,17 @@ export function ImportRecordDialog({ isOpen, onClose, onImport }: ImportRecordDi
             item['@type']?.includes('bf:Instance') || item['@type'] === 'bf:Instance'
           ) || {};
         } else if (parsed.work && parsed.instance) {
-          // Moon format with separate work and instance
           workData = parsed.work;
           instanceData = parsed.instance;
         } else if (parsed['@type']?.includes('bf:Work') || parsed['@type'] === 'bf:Work') {
-          // Single Work object
           workData = parsed;
         } else if (parsed['@type']?.includes('bf:Instance') || parsed['@type'] === 'bf:Instance') {
-          // Single Instance object
           instanceData = parsed;
         } else {
-          // Try to find nested Work/Instance with flexible property names
           workData = parsed.work || parsed.Work || {};
           instanceData = parsed.instance || parsed.Instance || {};
         }
       } else if (fileType === 'xml') {
-        // Basic XML/MARCXML parsing (simplified)
         setError('XML import is not yet implemented. Please use JSON-LD format.');
         return;
       } else if (fileType === 'rdf') {
@@ -96,13 +89,11 @@ export function ImportRecordDialog({ isOpen, onClose, onImport }: ImportRecordDi
         return;
       }
 
-      // Validate we got at least something
       if (Object.keys(workData).length === 0 && Object.keys(instanceData).length === 0) {
         setError('No valid BIBFRAME data found in file');
         return;
       }
 
-      // Set default @type if missing
       if (!workData['@type']) workData['@type'] = 'bf:Work';
       if (!instanceData['@type']) instanceData['@type'] = 'bf:Instance';
 
@@ -114,102 +105,149 @@ export function ImportRecordDialog({ isOpen, onClose, onImport }: ImportRecordDi
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl mx-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+      <div 
+        className="w-full max-w-xl mx-auto rounded-3xl overflow-hidden transition-all text-white border border-white/20"
+        style={{
+          background: 'rgba(255, 255, 255, 0.12)',
+          backdropFilter: 'blur(30px) saturate(1.8) brightness(1.1)',
+          WebkitBackdropFilter: 'blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)',
+          boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.2), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 20px rgba(255, 255, 255, 0.15), 0 20px 50px rgba(0, 0, 0, 0.5)'
+        }}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b dark:border-gray-700">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+        <div className="flex items-center justify-between p-6 border-b border-white/10">
+          <h2 className="text-xl font-bold text-white drop-shadow-sm flex items-center gap-2">
             Import BIBFRAME Record
           </h2>
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <button 
+            type="button" 
+            onClick={onClose}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/15 transition-all cursor-pointer"
+          >
             <X className="h-5 w-5" />
-          </Button>
+          </button>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6">
-          <div>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-              Import a BIBFRAME record from JSON-LD, XML, or RDF file.
-            </p>
+        <div className="p-6 space-y-5">
+          <p className="text-sm text-white/80">
+            Import a BIBFRAME record from JSON-LD, XML, or RDF file into MOON.
+          </p>
 
-            {/* File Upload */}
-            <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8">
-              <input
-                type="file"
-                id="file-upload"
-                className="hidden"
-                accept=".json,.jsonld,.xml,.rdf,.ttl,.n3,.marcxml"
-                onChange={handleFileSelect}
-              />
-              <label
-                htmlFor="file-upload"
-                className="flex flex-col items-center cursor-pointer"
+          {/* File Upload Drop Area */}
+          <div 
+            className="border-2 border-dashed border-white/30 rounded-2xl p-8 hover:border-white/60 transition-all cursor-pointer flex flex-col items-center justify-center text-center group"
+            style={{
+              background: 'rgba(255, 255, 255, 0.05)',
+            }}
+          >
+            <input
+              type="file"
+              id="file-upload"
+              className="hidden"
+              accept=".json,.jsonld,.xml,.rdf,.ttl,.n3,.marcxml"
+              onChange={handleFileSelect}
+            />
+            <label
+              htmlFor="file-upload"
+              className="flex flex-col items-center cursor-pointer w-full"
+            >
+              <div 
+                className="w-16 h-16 rounded-full flex items-center justify-center mb-3 group-hover:scale-105 transition-all"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.21)',
+                  backdropFilter: 'blur(4.5px) blur(9px) saturate(1.5) brightness(1.1)',
+                  WebkitBackdropFilter: 'blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)',
+                  boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.15), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.2), 0 8px 32px rgba(0, 0, 0, 0.25)',
+                  borderRadius: '120px'
+                }}
               >
-                <Upload className="h-12 w-12 text-gray-400 mb-3" />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Click to upload or drag and drop
-                </span>
-                <span className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  JSON-LD, XML, RDF, Turtle
-                </span>
-              </label>
-            </div>
+                <Upload className="h-7 w-7 text-white" />
+              </div>
+              <span className="text-base font-semibold text-white drop-shadow">
+                Click to upload or drag and drop
+              </span>
+              <span className="text-xs text-white/60 mt-1 font-mono">
+                JSON-LD, XML, RDF, Turtle
+              </span>
+            </label>
+          </div>
 
-            {/* Selected File */}
-            {selectedFile && (
-              <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                <div className="flex items-center gap-3">
-                  {fileType === 'jsonld' && <FileJson className="h-5 w-5 text-blue-600" />}
-                  {fileType === 'xml' && <FileText className="h-5 w-5 text-orange-600" />}
-                  {fileType === 'rdf' && <FileCode className="h-5 w-5 text-purple-600" />}
-                  <div className="flex-1">
-                    <div className="font-medium text-gray-900 dark:text-white">
-                      {selectedFile.name}
-                    </div>
-                    <div className="text-sm text-gray-600 dark:text-gray-400">
-                      {(selectedFile.size / 1024).toFixed(2)} KB
-                    </div>
-                  </div>
+          {/* Selected File */}
+          {selectedFile && (
+            <div 
+              className="p-4 rounded-2xl border border-white/20 flex items-center gap-3"
+              style={{
+                background: 'rgba(255, 255, 255, 0.15)',
+                backdropFilter: 'blur(10px)'
+              }}
+            >
+              {fileType === 'jsonld' && <FileJson className="h-6 w-6 text-cyan-300" />}
+              {fileType === 'xml' && <FileText className="h-6 w-6 text-amber-300" />}
+              {fileType === 'rdf' && <FileCode className="h-6 w-6 text-purple-300" />}
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-white truncate">
+                  {selectedFile.name}
+                </div>
+                <div className="text-xs text-white/70">
+                  {(selectedFile.size / 1024).toFixed(2)} KB
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Error Message */}
-            {error && (
-              <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-              </div>
-            )}
+          {/* Error Message */}
+          {error && (
+            <div className="p-3.5 rounded-2xl bg-red-500/20 border border-red-500/40 text-red-200 text-xs">
+              {error}
+            </div>
+          )}
 
-            {/* Preview */}
-            {fileContent && !error && fileType === 'jsonld' && (
-              <div className="mt-4">
-                <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Preview:
-                </h3>
-                <pre className="bg-gray-900 text-green-400 p-4 rounded-lg overflow-auto max-h-64 text-xs font-mono">
-                  {fileContent.substring(0, 500)}
-                  {fileContent.length > 500 && '\n...(truncated)'}
-                </pre>
-              </div>
-            )}
-          </div>
+          {/* Preview */}
+          {fileContent && !error && fileType === 'jsonld' && (
+            <div>
+              <h3 className="text-xs font-semibold text-white/80 mb-1.5 uppercase tracking-wider">
+                Preview:
+              </h3>
+              <pre className="bg-black/40 border border-white/10 text-emerald-300 p-3 rounded-xl overflow-auto max-h-40 text-xs font-mono">
+                {fileContent.substring(0, 400)}
+                {fileContent.length > 400 && '\n...(truncated)'}
+              </pre>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-6 border-t dark:border-gray-700">
-          <Button variant="outline" onClick={onClose}>
+        <div className="flex items-center justify-end gap-3 p-6 border-t border-white/10">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-2.5 text-xs font-bold text-white hover:bg-white/10 transition-all cursor-pointer"
+            style={{
+              borderRadius: '120px',
+              border: '1px solid rgba(255, 255, 255, 0.25)',
+            }}
+          >
             Cancel
-          </Button>
-          <Button
+          </button>
+          <button
+            type="button"
             onClick={handleImport}
             disabled={!selectedFile || !!error}
-            className="bg-blue-600 hover:bg-blue-700"
+            className="px-6 py-2.5 text-xs font-black text-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:scale-105 active:scale-95 flex items-center gap-2"
+            style={{
+              borderRadius: '120px',
+              background: 'rgba(255, 255, 255, 0.21)',
+              backdropFilter: 'blur(4.5px) blur(9px) saturate(1.5) brightness(1.1)',
+              WebkitBackdropFilter: 'blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)',
+              boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.15), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.2), 0 8px 32px rgba(0, 0, 0, 0.25)',
+              border: '1px solid rgba(255, 255, 255, 0.4)'
+            }}
           >
-            <Upload className="h-4 w-4 mr-2" />
-            Import Record
-          </Button>
+            <Upload className="h-4 w-4" />
+            <span>Import Record</span>
+          </button>
         </div>
       </div>
     </div>

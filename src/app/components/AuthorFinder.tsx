@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -499,11 +500,13 @@ function AuthorGridCard({
 function AuthorMultiSourceProfileModal({
   suggestion,
   onClose,
-  onCopyRdf
+  onCopyRdf,
+  onSelectAuthor
 }: {
   suggestion: AISuggestionProfile;
   onClose: () => void;
   onCopyRdf: () => void;
+  onSelectAuthor?: (authorData: any, targetType?: 'author' | 'contributor' | 'subject') => void;
 }) {
   const [activeTab, setActiveTab] = useState<'profile' | 'works' | 'network' | 'sources' | 'standards'>('profile');
   const [standardsFormat, setStandardsFormat] = useState<'bibframe' | 'marc21' | 'jsonld'>('bibframe');
@@ -639,6 +642,68 @@ function AuthorMultiSourceProfileModal({
             {/* Actions: Save to System & Canonical URI & Close */}
             <div className="flex items-center gap-2.5 self-end sm:self-center">
               
+              
+              {/* Insert into Record in MOON (Author / Contributor / Subject) */}
+              {onSelectAuthor && (
+                <div className="flex items-center gap-1.5 p-1 rounded-full bg-slate-900/60 border border-slate-700 shadow-md">
+                  <span className="text-[10px] font-bold text-slate-300 px-2 flex items-center gap-1">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                    <span>إدراج في MOON:</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectAuthor({
+                        name: authorNameAr,
+                        primaryName: authorNameAr,
+                        englishName: authorNameEn,
+                        moonUri: canonicalUri,
+                        wikidataId: suggestion.wikidataId,
+                        viafId: suggestion.viafId,
+                      }, 'author');
+                    }}
+                    className="px-3 py-1.5 rounded-full text-[11px] font-black transition-all bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1 cursor-pointer active:scale-95 shadow"
+                    title="إدراج كمؤلف رئيسي (Work Author)"
+                  >
+                    <span>+ مؤلف (Author)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectAuthor({
+                        name: authorNameAr,
+                        primaryName: authorNameAr,
+                        englishName: authorNameEn,
+                        moonUri: canonicalUri,
+                        wikidataId: suggestion.wikidataId,
+                        viafId: suggestion.viafId,
+                      }, 'contributor');
+                    }}
+                    className="px-3 py-1.5 rounded-full text-[11px] font-black transition-all bg-blue-600 hover:bg-blue-500 text-white flex items-center gap-1 cursor-pointer active:scale-95 shadow"
+                    title="إدراج كمساهم أو مشارك (Work Contributor)"
+                  >
+                    <span>+ مساهم (Contributor)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectAuthor({
+                        name: authorNameAr,
+                        primaryName: authorNameAr,
+                        englishName: authorNameEn,
+                        moonUri: canonicalUri,
+                        wikidataId: suggestion.wikidataId,
+                        viafId: suggestion.viafId,
+                      }, 'subject');
+                    }}
+                    className="px-3 py-1.5 rounded-full text-[11px] font-black transition-all bg-purple-600 hover:bg-purple-500 text-white flex items-center gap-1 cursor-pointer active:scale-95 shadow"
+                    title="إدراج كموضوع للشخصية (Work Subject)"
+                  >
+                    <span>+ موضوع (Subject)</span>
+                  </button>
+                </div>
+              )}
+
               {/* Save Record to System Button */}
               <button
                 onClick={handleSaveToSystem}
@@ -1382,7 +1447,17 @@ function WofMoonApiToolsModal({ onClose }: { onClose: () => void }) {
 }
 
 // MAIN COMPONENT
-export default function AuthorFinder({ onBack }: AuthorFinderProps) {
+export default function AuthorFinder({ onBack, onNavigate, onSelectAuthor }: AuthorFinderProps) {
+  const { i18n } = useTranslation();
+  const [lang, setLang] = useState<'ar' | 'en'>(() => (i18n?.language === 'en' ? 'en' : 'ar'));
+
+  const toggleLanguage = () => {
+    const next = lang === 'en' ? 'ar' : 'en';
+    setLang(next);
+    if (i18n?.changeLanguage) {
+      i18n.changeLanguage(next);
+    }
+  };
   const getInitialParam = (param: string) => {
     if (typeof window !== 'undefined') {
       return new URLSearchParams(window.location.search).get(param);
@@ -1638,6 +1713,7 @@ export default function AuthorFinder({ onBack }: AuthorFinderProps) {
           suggestion={detailsModal}
           onClose={() => setDetailsModal(null)}
           onCopyRdf={() => handleCopyRdf(detailsModal.bibframePersonRdf)}
+          onSelectAuthor={onSelectAuthor}
         />
       )}
 
@@ -1687,6 +1763,16 @@ export default function AuthorFinder({ onBack }: AuthorFinderProps) {
 
           {/* Header Controls & Docked Search Bar in Results Mode */}
           <div className="flex items-center gap-3">
+            {/* English / Arabic Switch */}
+            <button
+              type="button"
+              onClick={toggleLanguage}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/70 hover:bg-white text-xs font-bold text-slate-800 transition-all cursor-pointer border border-white/80 shadow-xs"
+              title={lang === 'en' ? 'التبديل إلى العربية' : 'Switch to English'}
+            >
+              <Globe className="w-3.5 h-3.5 text-blue-600" />
+              <span>{lang === 'en' ? 'عربي' : 'EN'}</span>
+            </button>
             {hasSearched && (
               <motion.div layoutId="search-pill-bar" className="relative">
                 <input
@@ -1765,10 +1851,10 @@ export default function AuthorFinder({ onBack }: AuthorFinderProps) {
                   {/* Large Stylized Headline */}
                   <div className="space-y-2">
                     <h1 className="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight leading-tight">
-                      Discover Iraqi authors
+                      {lang === 'ar' ? 'استكشف أعلام الفكر العراقي' : 'Discover Iraqi authors'}
                     </h1>
                     <p className="text-2xl sm:text-4xl font-black text-slate-900 tracking-tight flex items-center justify-center flex-wrap gap-2">
-                      <span>Explore authors, works,</span>
+                      <span>{lang === 'ar' ? 'اكتشف المؤلفين، الأعمال،' : 'Explore authors, works,'}</span>
                       <span
                         className="inline-flex items-center px-4 py-1 font-black text-slate-900 align-middle transition-transform hover:scale-105"
                         style={{
@@ -1780,11 +1866,13 @@ export default function AuthorFinder({ onBack }: AuthorFinderProps) {
                           border: '1.5px solid rgba(255, 255, 255, 1)',
                         }}
                       >
-                        and connections
+                        {lang === 'ar' ? 'والروابط المعرفية' : 'and connections'}
                       </span>
                     </p>
                     <p className="text-xs sm:text-sm text-slate-600 font-medium pt-2">
-                      استكشف أعلام الفكر والأدب العراقي، مؤلفاتهم، وروابطهم المعرفية بالذكاء الاصطناعي
+                      {lang === 'ar'
+                        ? 'استكشف أعلام الفكر والأدب العراقي، مؤلفاتهم، وروابطهم المعرفية بالذكاء الاصطناعي'
+                        : 'Explore Iraqi intellectual & literary figures, their bibliography, and semantic links via AI'}
                     </p>
                   </div>
 
@@ -1800,7 +1888,7 @@ export default function AuthorFinder({ onBack }: AuthorFinderProps) {
                         value={nameQuery}
                         onChange={e => setNameQuery(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="Find Iraqi authors on..."
+                        placeholder={lang === 'ar' ? 'ابحث عن المؤلفين العراقيين...' : 'Find Iraqi authors on...'}
                         className="w-full pl-5 pr-4 py-2.5 bg-transparent text-sm font-semibold text-slate-900 placeholder-slate-400 outline-none"
                       />
                       
@@ -1812,14 +1900,14 @@ export default function AuthorFinder({ onBack }: AuthorFinderProps) {
                         <div className="w-5 h-5 rounded-full bg-black flex items-center justify-center p-0.5">
                           <img src={moonWhiteLogo} alt="" className="w-full h-full object-contain" />
                         </div>
-                        <span>find the authors</span>
+                        <span>{lang === 'ar' ? 'ابحث عن المؤلفين' : 'find the authors'}</span>
                       </button>
                     </motion.div>
 
                     {/* Quick suggestion pills */}
                     <div className="flex flex-wrap items-center justify-center gap-2 pt-4">
                       <span className="text-[11px] font-bold text-slate-400 ml-1">
-                        :اقتراحات سريعة
+                        {lang === 'ar' ? ':اقتراحات سريعة' : 'Quick suggestions:'}
                       </span>
                       {[
                         'علي الوردي',
@@ -1853,7 +1941,7 @@ export default function AuthorFinder({ onBack }: AuthorFinderProps) {
                         }}
                         className="inline-flex items-center gap-1.5 text-xs font-bold liquid-glass-btn px-4 py-2 text-slate-800 transition-colors cursor-pointer"
                       >
-                        <span>استعراض شبكة المؤلفين الـ 12</span>
+                        <span>{lang === 'ar' ? 'استعراض شبكة المؤلفين الـ 12' : 'Explore network of 12 authors'}</span>
                         <ChevronRight className="w-4 h-4 rotate-180 text-slate-700" />
                       </button>
                     </div>

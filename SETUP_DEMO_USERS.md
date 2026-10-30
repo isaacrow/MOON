@@ -1,5 +1,7 @@
 # 🔐 Setting Up Demo Users for Testing
 
+> **Deprecated:** this guide relies on the removed `/setup-demo` endpoint and `X-User-ID` development authentication. Do not run its commands against a deployed environment.
+
 ## Quick Start
 
 MOON now requires authentication. Here's how to set up demo users for testing.

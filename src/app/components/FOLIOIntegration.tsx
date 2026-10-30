@@ -25,7 +25,7 @@ import {
   CheckCircle,
   Loader2
 } from 'lucide-react';
-import { FOLIOApiClient, initializeFOLIOClient, FOLIOInstance, FOLIOConfig } from '../services/folioApiClient';
+import { FOLIOApiClient, initializeFOLIOClient, FOLIOInstance, FOLIOConfig, FOLIO_PRESETS } from '../services/folioApiClient';
 import { BIBFRAMERecord } from '../types/bibframe';
 
 interface FOLIOIntegrationProps {
@@ -40,8 +40,8 @@ export function FOLIOIntegration({ onBack, currentRecord, onRecordImport }: FOLI
 
   // FOLIO Connection State
   const [config, setConfig] = useState<FOLIOConfig>({
-    okapiUrl: localStorage.getItem('folio_okapi_url') || 'https://folio-snapshot-okapi.dev.folio.org',
-    tenant: localStorage.getItem('folio_tenant') || 'diku',
+    okapiUrl: localStorage.getItem('folio_okapi_url') || FOLIO_PRESETS.local.okapiUrl,
+    tenant: localStorage.getItem('folio_tenant') || FOLIO_PRESETS.local.tenant,
   });
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -49,6 +49,34 @@ export function FOLIOIntegration({ onBack, currentRecord, onRecordImport }: FOLI
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [client, setClient] = useState<FOLIOApiClient | null>(null);
+
+  // Local Stack Health Check State
+  const [localHealth, setLocalHealth] = useState<{ checked: boolean; ok: boolean; version?: string; error?: string }>({
+    checked: false,
+    ok: false,
+  });
+  const [isCheckingLocal, setIsCheckingLocal] = useState(false);
+
+  // Check local stack health on mount or when requested
+  const checkLocalStackHealth = async () => {
+    setIsCheckingLocal(true);
+    try {
+      const probeClient = new FOLIOApiClient({
+        okapiUrl: FOLIO_PRESETS.local.okapiUrl,
+        tenant: FOLIO_PRESETS.local.tenant,
+      });
+      const res = await probeClient.checkHealth();
+      setLocalHealth({ checked: true, ok: res.ok, version: res.version, error: res.error });
+    } catch (err: any) {
+      setLocalHealth({ checked: true, ok: false, error: err.message });
+    } finally {
+      setIsCheckingLocal(false);
+    }
+  };
+
+  useEffect(() => {
+    checkLocalStackHealth();
+  }, []);
 
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -342,24 +370,91 @@ export function FOLIOIntegration({ onBack, currentRecord, onRecordImport }: FOLI
                   )}
                 </Button>
 
-                {/* Quick Setup Examples */}
+                {/* Quick Setup Presets */}
                 <div className="border-t pt-4 mt-4">
-                  <h3 className="font-semibold mb-2">Quick Setup Examples:</h3>
-                  <div className="space-y-2 text-sm">
-                    <div className="p-3 bg-gray-100 dark:bg-gray-800 rounded">
-                      <div className="font-medium">FOLIO Snapshot (Public)</div>
-                      <div className="text-gray-600 dark:text-gray-400">
-                        URL: https://folio-snapshot-okapi.dev.folio.org
-                        <br />
-                        Tenant: diku
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="font-semibold text-sm">Presets & Environments:</h3>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={checkLocalStackHealth}
+                      disabled={isCheckingLocal}
+                      className="text-xs h-7"
+                    >
+                      <RefreshCw className={`h-3 w-3 mr-1 ${isCheckingLocal ? 'animate-spin' : ''}`} />
+                      Probe Local Stack
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                    {/* Local Core (:8080) Preset */}
+                    <div
+                      onClick={() => !isConnected && setConfig({ okapiUrl: FOLIO_PRESETS.localCore.okapiUrl, tenant: FOLIO_PRESETS.localCore.tenant })}
+                      className={`p-3 border rounded-lg cursor-pointer transition-all ${
+                        config.okapiUrl === FOLIO_PRESETS.localCore.okapiUrl
+                          ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 shadow-sm'
+                          : 'bg-gray-100 dark:bg-gray-800 hover:border-gray-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold text-emerald-600 dark:text-emerald-400">
+                          {FOLIO_PRESETS.localCore.name}
+                        </div>
+                        <Badge variant="default" className="bg-emerald-600">
+                          Core Engine
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                        <div>API: <code className="font-mono">{FOLIO_PRESETS.localCore.okapiUrl}</code></div>
+                        <div>Tenant: <code className="font-mono">{FOLIO_PRESETS.localCore.tenant}</code></div>
+                        <div>Status: <span className="text-emerald-600 font-semibold">Active Inventory</span></div>
                       </div>
                     </div>
-                    <div className="p-3 bg-gray-100 dark:bg-gray-800 rounded">
-                      <div className="font-medium">Local FOLIO Instance</div>
-                      <div className="text-gray-600 dark:text-gray-400">
-                        URL: http://localhost:9130
-                        <br />
-                        Tenant: diku (or your tenant ID)
+
+                    {/* Local Okapi Gateway Preset */}
+                    <div
+                      onClick={() => !isConnected && setConfig({ okapiUrl: FOLIO_PRESETS.local.okapiUrl, tenant: FOLIO_PRESETS.local.tenant })}
+                      className={`p-3 border rounded-lg cursor-pointer transition-all ${
+                        config.okapiUrl === FOLIO_PRESETS.local.okapiUrl
+                          ? 'border-orange-500 bg-orange-50/50 dark:bg-orange-950/20 shadow-sm'
+                          : 'bg-gray-100 dark:bg-gray-800 hover:border-gray-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold text-orange-600 dark:text-orange-400">
+                          {FOLIO_PRESETS.local.name}
+                        </div>
+                        {localHealth.checked && (
+                          <Badge variant={localHealth.ok ? 'default' : 'secondary'} className={localHealth.ok ? 'bg-green-600' : 'bg-amber-600'}>
+                            {localHealth.ok ? 'Online' : 'Stopped'}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                        <div>Gateway: <code className="font-mono">{FOLIO_PRESETS.local.okapiUrl}</code></div>
+                        <div>Tenant: <code className="font-mono">{FOLIO_PRESETS.local.tenant}</code></div>
+                        <div>UI (Stripes): <code className="font-mono">{FOLIO_PRESETS.local.uiUrl}</code></div>
+                      </div>
+                    </div>
+
+                    {/* Community Snapshot Preset */}
+                    <div
+                      onClick={() => !isConnected && setConfig({ okapiUrl: FOLIO_PRESETS.snapshot.okapiUrl, tenant: FOLIO_PRESETS.snapshot.tenant })}
+                      className={`p-3 border rounded-lg cursor-pointer transition-all ${
+                        config.okapiUrl === FOLIO_PRESETS.snapshot.okapiUrl
+                          ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 shadow-sm'
+                          : 'bg-gray-100 dark:bg-gray-800 hover:border-gray-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold text-blue-600 dark:text-blue-400">
+                          {FOLIO_PRESETS.snapshot.name}
+                        </div>
+                        <Badge variant="outline">Cloud</Badge>
+                      </div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                        <div>Gateway: <code className="font-mono text-[11px]">{FOLIO_PRESETS.snapshot.okapiUrl}</code></div>
+                        <div>Tenant: <code className="font-mono">{FOLIO_PRESETS.snapshot.tenant}</code></div>
+                        <div>UI (Stripes): <code className="font-mono">{FOLIO_PRESETS.snapshot.uiUrl}</code></div>
                       </div>
                     </div>
                   </div>

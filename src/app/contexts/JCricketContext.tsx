@@ -47,7 +47,7 @@ export function JCricketProvider({ children }: { children: ReactNode }) {
   const loadUserProfile = useCallback(async () => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/profile`,
+        `/api/jcricket/profile`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken || publicAnonKey}`,
@@ -76,7 +76,7 @@ export function JCricketProvider({ children }: { children: ReactNode }) {
   const loadNotifications = useCallback(async () => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/notifications`,
+        `/api/jcricket/notifications`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken || publicAnonKey}`,
@@ -96,7 +96,7 @@ export function JCricketProvider({ children }: { children: ReactNode }) {
   const markNotificationAsRead = useCallback(async (notificationId: string) => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/notifications/${notificationId}/read`,
+        `/api/jcricket/notifications/${notificationId}/read`,
         {
           method: 'POST',
           headers: {
@@ -118,7 +118,7 @@ export function JCricketProvider({ children }: { children: ReactNode }) {
   const loadReviewQueue = useCallback(async () => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/review-queue`,
+        `/api/jcricket/review-queue`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken || publicAnonKey}`,
@@ -138,7 +138,7 @@ export function JCricketProvider({ children }: { children: ReactNode }) {
   const loadCollaborationStats = useCallback(async () => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/stats`,
+        `/api/jcricket/stats`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken || publicAnonKey}`,
@@ -158,7 +158,7 @@ export function JCricketProvider({ children }: { children: ReactNode }) {
   const checkConcurrentEdits = useCallback(async (clusterId: string): Promise<ConcurrentEditWarning | null> => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/cluster/${clusterId}/concurrent-edits`,
+        `/api/jcricket/cluster/${clusterId}/concurrent-edits`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken || publicAnonKey}`,
@@ -180,7 +180,7 @@ export function JCricketProvider({ children }: { children: ReactNode }) {
   const updateLanguagePreferences = useCallback(async (languages: string[]) => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/profile/languages`,
+        `/api/jcricket/profile/languages`,
         {
           method: 'PUT',
           headers: {

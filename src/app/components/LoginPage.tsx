@@ -1,17 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTranslation } from 'react-i18next';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth, AuthUser } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Lock, User, Eye, EyeOff, Languages, Zap } from 'lucide-react';
+import {
+  Lock,
+  User,
+  Mail,
+  Building2,
+  KeyRound,
+  Eye,
+  EyeOff,
+  Languages,
+  ShieldCheck,
+  CheckCircle2,
+  Clock,
+  XCircle,
+  Trash2,
+  X,
+  Sparkles,
+} from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
 import moonLogoWhite from '../../assets/white.png';
-import moonLogoBlack from '../../assets/black.png';
 
-// Spline Scene URL - Updated to new 3D design text scene
+// Spline Scene URL - 3D interactive scene
 const SPLINE_SCENE_URL = 'https://my.spline.design/3ddesigntextcopycopy-ICjwUjRH9s8O1NCNqRAWjo5g-5OJ/';
 
 interface LoginPageProps {
@@ -22,56 +37,178 @@ interface LoginPageProps {
 }
 
 export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps) {
+  const isAr = currentLanguage === "ar";
   const { t } = useTranslation();
-  const { login, signup } = useAuth();
-  
+  const { login, signup, getUsers, approveUser, rejectUser, deleteUser, pendingCount } = useAuth();
+
   // Login State
-  const [username, setUsername] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+
+  // Sign Up / Tester Request State
+  const [regUsername, setRegUsername] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regInstitution, setRegInstitution] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [regInviteCode, setRegInviteCode] = useState('');
+
+  // Status & Feedback
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [pendingApprovalInfo, setPendingApprovalInfo] = useState<{
+    user: string;
+    email: string;
+    institution: string;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState('login');
+  const [activeTab, setActiveTab] = useState<'login' | 'signup'>('login');
   const [showPassword, setShowPassword] = useState(false);
-  
+
+  // Admin Approval Modal State
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [adminPasscode, setAdminPasscode] = useState('');
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
+  const [adminError, setAdminError] = useState('');
+  const [adminUsers, setAdminUsers] = useState<AuthUser[]>([]);
+
   // UI State
   const [isUiVisible, setIsUiVisible] = useState(true);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const refreshAdminUsers = () => {
+    setAdminUsers(getUsers());
+  };
+
+  useEffect(() => {
+    if (showAdminModal && isAdminUnlocked) {
+      refreshAdminUsers();
+    }
+  }, [showAdminModal, isAdminUnlocked]);
+
+  const handleAdminUnlock = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminError('');
+    const code = adminPasscode.trim();
+    if (code === 'Eshak1996' || code.toLowerCase() === 'isaac') {
+      setIsAdminUnlocked(true);
+      setAdminUsers(getUsers());
+    } else {
+      setAdminError('Invalid Super Admin credentials. Only Isaac Faleh can approve testers.');
+    }
+  };
+
+  const handleApproveTester = (username: string) => {
+    approveUser(username);
+    refreshAdminUsers();
+  };
+
+  const handleRejectTester = (username: string) => {
+    rejectUser(username);
+    refreshAdminUsers();
+  };
+
+  const handleDeleteTester = (username: string) => {
+    deleteUser(username);
+    refreshAdminUsers();
+  };
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
-    
-    // Client-side validation
-    if (!username.trim()) {
-      setError('Username is required');
+    setPendingApprovalInfo(null);
+
+    if (!identifier.trim()) {
+      setError('Username or Email is required');
       return;
     }
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+    if (!password) {
+      setError('Password is required');
       return;
     }
-    
+
     setLoading(true);
 
     try {
-      if (activeTab === 'login') {
-        const loginSuccess = await login(username, password);
-        if (!loginSuccess) {
-          setError(t('invalidCredentials') || 'Invalid username or password. If you don\'t have an account, use the Sign Up tab.');
-        }
-      } else {
-        const signupSuccess = await signup(username, password);
-        if (signupSuccess) {
-          setSuccess('Account created successfully! You are now logged in.');
-          // No need to redirect to login tab — auto-login from signup handles it
+      const res = await login(identifier, password);
+      if (!res.success) {
+        if (res.status === 'pending') {
+          setError(
+            res.message ||
+              'Your account is awaiting approval by administrator Isaac Faleh. Once approved, you can sign in to test the editor.'
+          );
         } else {
-          setError('Failed to create account. Username may already exist.');
+          setError(res.message || 'Invalid credentials. Please verify your username and password.');
         }
       }
     } catch (err) {
-      setError('An unexpected error occurred. Please try again.');
-      console.error('Auth error:', err);
+      setError('An unexpected error occurred during login. Please try again.');
+      console.error('Login error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+    setPendingApprovalInfo(null);
+
+    if (!regUsername.trim()) {
+      setError('User / Username is required');
+      return;
+    }
+    if (!regEmail.trim() || !regEmail.includes('@')) {
+      setError('A valid Email address is required');
+      return;
+    }
+    if (!regInstitution.trim()) {
+      setError('Institution or Organization is required');
+      return;
+    }
+    if (regPassword.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const res = await signup({
+        username: regUsername,
+        email: regEmail,
+        institution: regInstitution,
+        password: regPassword,
+        inviteCode: regInviteCode,
+      });
+
+      if (res.success) {
+        if (res.status === 'pending') {
+          setPendingApprovalInfo({
+            user: regUsername,
+            email: regEmail,
+            institution: regInstitution,
+          });
+          setSuccess(
+            res.message ||
+              (isAr ? 'تم إرسال طلب التسجيل بنجاح! حسابك قيد مراجعة إسحاق فالح.' : 'Tester registration submitted! Your account is pending administrator approval (Isaac Faleh).')
+          );
+          setIdentifier(regUsername);
+        } else {
+          setSuccess(
+            res.message ||
+              (isAr ? 'تم تفعيل الحساب فورياً بنجاح عبر رمز VIP! يمكنك الآن تسجيل الدخول مباشرة.' : 'Account approved immediately via VIP code! You can now log in.')
+          );
+          setIdentifier(regUsername);
+          setPassword(regPassword);
+          setActiveTab('login');
+        }
+      } else {
+        setError(res.message || 'Failed to submit registration. Username or email may already exist.');
+      }
+    } catch (err) {
+      setError('An error occurred during registration. Please try again.');
+      console.error('Signup error:', err);
     } finally {
       setLoading(false);
     }
@@ -81,21 +218,21 @@ export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps)
     <div className="relative h-screen w-screen overflow-hidden bg-black text-white">
       {/* Ambient Background Gradients */}
       <div className="absolute inset-0 bg-gradient-to-br from-blue-950/20 via-purple-950/20 to-pink-950/20 z-0" />
-      
-      {/* Spline 3D Background - Always receives mouse events for tracking */}
+
+      {/* Spline 3D Background */}
       <div className="absolute inset-0 z-0" style={{ top: '-15%', height: '130%' }}>
-        <iframe 
+        <iframe
           src={SPLINE_SCENE_URL}
-          frameBorder="0" 
-          width="100%" 
-          height="100%" 
+          frameBorder="0"
+          width="100%"
+          height="100%"
           className="w-full h-full"
           title="Spline 3D Scene"
           allow="fullscreen; autoplay"
-          style={{ 
+          style={{
             pointerEvents: 'auto',
             border: 'none',
-            background: 'transparent'
+            background: 'transparent',
           }}
         />
       </div>
@@ -117,16 +254,19 @@ export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps)
             transition={{ duration: 0.4 }}
             className="absolute top-0 left-0 right-0 z-40 p-6 flex items-center justify-between"
           >
-            <div className="absolute top-6 right-6 flex items-center gap-3 backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-4 shadow-2xl">
-              <div className="w-16 h-16 flex items-center justify-center backdrop-blur-md bg-white/20 rounded-xl border border-white/30 shadow-lg">
+            <div 
+              className="absolute top-6 right-6 flex items-center gap-3.5 backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-4 shadow-2xl"
+              dir={isAr ? "rtl" : "ltr"}
+            >
+              <div className="w-16 h-16 flex items-center justify-center backdrop-blur-md bg-white/20 rounded-xl border border-white/30 shadow-lg shrink-0">
                 <img src={moonLogoWhite} alt="Moon Logo" className="w-full h-full object-contain drop-shadow-2xl" />
               </div>
-              <div>
-                <h1 className="text-2xl font-bold text-white drop-shadow-lg">
-                  DESIGN AND DEVELOPED BY ISAAC FALEH
+              <div className={isAr ? "text-right" : "text-left"}>
+                <h1 className="text-xl sm:text-2xl font-bold text-white drop-shadow-lg leading-tight">
+                  {isAr ? "تصميم وتطوير: إسحاق فالح" : "DESIGN AND DEVELOPED BY ISAAC FALEH"}
                 </h1>
-                <p className="text-[10px] uppercase tracking-[0.2em] text-white/60 mt-0.5 drop-shadow-md">
-                  Bibliographic Framework System v3.0
+                <p className="text-[11px] text-white/80 mt-1 drop-shadow-md font-medium">
+                  {isAr ? "محرر MOON • منصة البيانات المترابطة التجريبية BIBFRAME 3.0.1" : "Moon Editor • BIBFRAME 3.0.1 Linked Data Pilot Platform"}
                 </p>
               </div>
             </div>
@@ -134,237 +274,621 @@ export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps)
         )}
       </AnimatePresence>
 
-      {/* UI Control Buttons */}
-      <div className="absolute bottom-8 right-8 z-50 flex gap-3">
-        <motion.div
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-        >
+      {/* Bottom Controls */}
+      <div className="absolute bottom-8 right-8 z-50 flex items-center gap-3">
+        
+
+        {/* Language Switcher */}
+        <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
           <Button
             variant="outline"
             size="icon"
             onClick={() => onLanguageChange(currentLanguage === 'en' ? 'ar' : 'en')}
-            className="bg-black/30 border-white/20 text-white hover:bg-white/10 backdrop-blur-xl rounded-xl w-12 h-12 shadow-[0_0_20px_rgba(0,0,0,0.5)]"
+            className="bg-black/40 border-white/20 text-white hover:bg-white/10 backdrop-blur-xl rounded-xl w-11 h-11 shadow-[0_0_20px_rgba(0,0,0,0.5)]"
+            title="تبديل اللغة (Language)"
           >
-            <Languages className="h-5 w-5" />
+            <Languages className="h-4 w-4" />
           </Button>
         </motion.div>
-        <motion.div
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-        >
+
+        {/* Hide/Show UI */}
+        <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
           <Button
             variant="outline"
             size="icon"
             onClick={() => setIsUiVisible(!isUiVisible)}
-            className="bg-black/30 border-white/20 text-white hover:bg-white/10 backdrop-blur-xl rounded-xl w-12 h-12 shadow-[0_0_20px_rgba(0,0,0,0.5)]"
+            className="bg-black/40 border-white/20 text-white hover:bg-white/10 backdrop-blur-xl rounded-xl w-11 h-11 shadow-[0_0_20px_rgba(0,0,0,0.5)]"
+            title={isUiVisible ? 'Hide UI overlay' : 'Show UI overlay'}
           >
-            {isUiVisible ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+            {isUiVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </Button>
         </motion.div>
       </div>
 
-      {/* Login Card */}
+      {/* Main Authentication Card */}
       <AnimatePresence>
         {isUiVisible && (
           <motion.div
             initial={{ opacity: 0, x: -100, scale: 0.95 }}
             animate={{ opacity: 1, x: 0, scale: 1 }}
             exit={{ opacity: 0, x: -100, scale: 0.95 }}
-            transition={{ 
-              type: 'spring', 
-              damping: 25, 
+            transition={{
+              type: 'spring',
+              damping: 25,
               stiffness: 200,
-              opacity: { duration: 0.3 }
+              opacity: { duration: 0.3 },
             }}
-            className="absolute top-1/2 left-12 -translate-y-1/2 z-30 pointer-events-none"
+            className={`absolute top-1/2 ${isAr ? "right-8 sm:right-12" : "left-8 sm:left-12"} -translate-y-1/2 z-30 pointer-events-none max-h-[92vh] overflow-y-auto`}
+            dir={isAr ? "rtl" : "ltr"}
           >
-            <Card className="w-[420px] bg-black/40 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.6),0_0_1px_rgba(255,255,255,0.1)_inset] pointer-events-auto overflow-hidden rounded-2xl">
-              {/* Animated gradient border */}
-              <motion.div 
-                className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500"
+            <Card className="w-[430px] max-w-[94vw] bg-black/55 backdrop-blur-2xl border border-white/15 shadow-[0_8px_32px_rgba(0,0,0,0.7),0_0_1px_rgba(255,255,255,0.15)_inset] pointer-events-auto overflow-hidden rounded-3xl">
+              {/* Animated gradient accent border */}
+              <motion.div
+                className="absolute top-0 left-0 w-full h-[2.5px] bg-gradient-to-r from-blue-500 via-indigo-400 via-amber-400 to-pink-500"
                 animate={{
                   backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'],
                 }}
                 transition={{
-                  duration: 3,
+                  duration: 4,
                   repeat: Infinity,
-                  ease: 'linear'
+                  ease: 'linear',
                 }}
                 style={{
-                  backgroundSize: '200% 100%'
+                  backgroundSize: '200% 100%',
                 }}
               />
 
-              {/* Corner accents */}
-              <div className="absolute top-0 left-0 w-24 h-24 border-t-2 border-l-2 border-blue-400/30 rounded-tl-2xl" />
-              <div className="absolute bottom-0 right-0 w-24 h-24 border-b-2 border-r-2 border-purple-400/30 rounded-br-2xl" />
-
-              <CardHeader className="pb-4 pt-8">
-                <CardTitle className="text-3xl font-bold tracking-tight flex items-center gap-3">
-                  <img src={moonLogoWhite} alt="Moon Logo" className="w-16 h-16 object-contain drop-shadow-xl" />
-                  <span className="text-white font-bold">
-                    moon editor
-                  </span>
-                </CardTitle>
-                <div className="flex items-center justify-between mt-3">
-                  <p className="text-white/40 text-xs uppercase tracking-[0.15em]">
-                    Secure Access Portal
-                  </p>
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                    <span className="text-[10px] text-green-400/70 uppercase tracking-wider">Online</span>
+              <CardHeader className="pb-3 pt-6 px-7">
+                <CardTitle className="text-2xl font-black tracking-tight flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <img src={moonLogoWhite} alt="Moon Logo" className="w-12 h-12 object-contain drop-shadow-xl" />
+                    <div>
+                      <span className="text-white block font-black text-xl">
+                        {isAr ? "محرر MOON" : "Moon Editor"}
+                      </span>
+                      <span className="text-[10px] text-blue-300 font-semibold tracking-wider uppercase block">
+                        {isAr ? "بوابة البيانات المترابطة التجريبية ببفريم" : "BIBFRAME Linked Data Pilot Portal"}
+                      </span>
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => onLanguageChange(isAr ? "en" : "ar")}
+                    className="px-3 py-1.5 rounded-full text-xs font-bold text-white bg-white/15 hover:bg-white/25 border border-white/30 backdrop-blur-md transition-all cursor-pointer flex items-center gap-1.5 shadow"
+                  >
+                    <Languages className="w-3.5 h-3.5 text-blue-300" />
+                    <span>{isAr ? "EN" : "عربي"}</span>
+                  </button>
+                </CardTitle>
+                <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/10">
+                  <p className="text-white/60 text-[11px] font-medium tracking-wide">
+                    {activeTab === 'login' 
+                      ? (isAr ? "تسجيل الدخول لتجربة المحرر" : "Sign In to Test Editor")
+                      : (isAr ? "طلب حساب فاحص (يتطلب موافقة)" : "Request Access (Requires Approval)")}
+                  </p>
                 </div>
               </CardHeader>
 
-              <CardContent className="px-8 pb-8">
-                <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                  <TabsList className="grid w-full grid-cols-2 bg-white/5 border border-white/10 mb-6 p-1 rounded-xl">
-                    <TabsTrigger 
-                      value="login" 
-                      className="data-[state=active]:bg-white/20 data-[state=active]:backdrop-blur-xl data-[state=active]:border data-[state=active]:border-white/30 data-[state=active]:shadow-[0_0_20px_rgba(255,255,255,0.3)] data-[state=active]:text-white text-white/50 text-xs uppercase tracking-[0.1em] font-semibold rounded-lg transition-all duration-300"
+              <CardContent className="px-7 pb-7 pt-2">
+                <Tabs
+                  value={activeTab}
+                  onValueChange={(val) => {
+                    setActiveTab(val as 'login' | 'signup');
+                    setError('');
+                    setSuccess('');
+                    setPendingApprovalInfo(null);
+                  }}
+                  className="w-full"
+                >
+                  <TabsList className="grid w-full grid-cols-2 bg-white/5 border border-white/10 mb-5 p-1 rounded-2xl">
+                    <TabsTrigger
+                      value="login"
+                      className="data-[state=active]:bg-white/20 data-[state=active]:backdrop-blur-xl data-[state=active]:border data-[state=active]:border-white/30 data-[state=active]:shadow-lg data-[state=active]:text-white text-white/60 text-xs font-bold rounded-xl py-2 transition-all duration-300 cursor-pointer"
                     >
-                      {t('login') || 'Login'}
+                      {isAr ? "تسجيل الدخول" : (t('login') || 'Sign In')}
                     </TabsTrigger>
-                    <TabsTrigger 
-                      value="signup" 
-                      className="data-[state=active]:bg-white/20 data-[state=active]:backdrop-blur-xl data-[state=active]:border data-[state=active]:border-white/30 data-[state=active]:shadow-[0_0_20px_rgba(255,255,255,0.3)] data-[state=active]:text-white text-white/50 text-xs uppercase tracking-[0.1em] font-semibold rounded-lg transition-all duration-300"
+                    <TabsTrigger
+                      value="signup"
+                      className="data-[state=active]:bg-white/20 data-[state=active]:backdrop-blur-xl data-[state=active]:border data-[state=active]:border-white/30 data-[state=active]:shadow-lg data-[state=active]:text-white text-white/60 text-xs font-bold rounded-xl py-2 transition-all duration-300 cursor-pointer"
                     >
-                      {t('signup') || 'Sign Up'}
+                      {isAr ? "طلب حساب فاحص" : "Request Access"}
                     </TabsTrigger>
                   </TabsList>
 
-                  <form onSubmit={handleSubmit} className="space-y-5">
-                    <div className="space-y-2">
-                      <Label className="text-white/70 text-[11px] uppercase tracking-[0.12em] font-medium" htmlFor="username">
-                        Username
-                      </Label>
-                      <div className="relative group">
-                        <User className="absolute left-3.5 top-3 h-4 w-4 text-white/30 group-focus-within:text-blue-400 transition-colors duration-200" />
-                        <Input 
-                          id="username"
-                          value={username}
-                          onChange={(e) => setUsername(e.target.value)}
-                          className="pl-11 h-11 bg-black/30 border border-white/10 text-white placeholder:text-white/20 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500/50 transition-all duration-300 rounded-xl hover:border-white/20"
-                          placeholder="Enter your identifier"
-                          disabled={loading}
-                        />
+                  {/* ===== SIGN IN FORM ===== */}
+                  {activeTab === 'login' && (
+                    <form onSubmit={handleLoginSubmit} className="space-y-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-white/85 text-[11px] font-bold block text-right" htmlFor="identifier">
+                          {isAr ? "اسم المستخدم أو البريد الإلكتروني *" : "User or Email *"}
+                        </Label>
+                        <div className="relative group">
+                          <User className={`absolute ${isAr ? 'right-3.5' : 'left-3.5'} top-3.5 h-4 w-4 text-white/40 group-focus-within:text-blue-400 transition-colors duration-200`} />
+                          <Input
+                            id="identifier"
+                            value={identifier}
+                            onChange={(e) => setIdentifier(e.target.value)}
+                            className={`${isAr ? 'pr-10 pl-4 text-right' : 'pl-10 pr-4 text-left'} h-11 bg-black/40 border border-white/15 text-white placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-400 transition-all rounded-xl`}
+                            placeholder={isAr ? "اسم المستخدم أو البريد (مثل isaac أو tester)" : "Username or email (e.g. isaac or tester)"}
+                            disabled={loading}
+                            dir={isAr ? "rtl" : "ltr"}
+                          />
+                        </div>
                       </div>
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <Label className="text-white/70 text-[11px] uppercase tracking-[0.12em] font-medium" htmlFor="password">
-                        Password
-                      </Label>
-                      <div className="relative group">
-                        <Lock className="absolute left-3.5 top-3 h-4 w-4 text-white/30 group-focus-within:text-purple-400 transition-colors duration-200" />
-                        <Input 
-                          id="password"
-                          type={showPassword ? 'text' : 'password'}
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          className="pl-11 pr-11 h-11 bg-black/30 border border-white/10 text-white placeholder:text-white/20 focus-visible:ring-2 focus-visible:ring-purple-500/50 focus-visible:border-purple-500/50 transition-all duration-300 rounded-xl hover:border-white/20"
-                          placeholder="Enter your access key"
-                          disabled={loading}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 top-3 text-white/30 hover:text-white/60 transition-colors"
-                          disabled={loading}
-                        >
-                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </div>
 
-                    <AnimatePresence mode="wait">
-                      {error && (
-                        <motion.div
-                          initial={{ opacity: 0, y: -10, height: 0 }}
-                          animate={{ opacity: 1, y: 0, height: 'auto' }}
-                          exit={{ opacity: 0, y: -10, height: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs backdrop-blur-sm"
+                      <div className="space-y-1.5">
+                        <Label className="text-white/85 text-[11px] font-bold block text-right" htmlFor="password">
+                          {isAr ? "كلمة المرور *" : "Password *"}
+                        </Label>
+                        <div className="relative group">
+                          <Lock className={`absolute ${isAr ? 'right-3.5' : 'left-3.5'} top-3.5 h-4 w-4 text-white/40 group-focus-within:text-purple-400 transition-colors duration-200`} />
+                          <Input
+                            id="password"
+                            type={showPassword ? 'text' : 'password'}
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className={`${isAr ? 'pr-10 pl-10 text-right' : 'pl-10 pr-10 text-left'} h-11 bg-black/40 border border-white/15 text-white placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-purple-500/50 focus-visible:border-purple-400 transition-all rounded-xl`}
+                            placeholder={isAr ? "أدخل كلمة المرور" : "Enter password"}
+                            disabled={loading}
+                            dir={isAr ? "rtl" : "ltr"}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className={`absolute ${isAr ? 'left-3' : 'right-3'} top-3.5 text-white/40 hover:text-white/70 transition-colors cursor-pointer`}
+                            disabled={loading}
+                          >
+                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <AnimatePresence mode="wait">
+                        {error && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0 }}
+                            className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-200 text-xs backdrop-blur-md leading-relaxed"
+                          >
+                            <div className="flex items-start gap-2">
+                              <XCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+                              <span>{error}</span>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+
+                      <motion.div whileHover={{ scale: loading ? 1 : 1.01 }} whileTap={{ scale: loading ? 1 : 0.98 }} className="pt-2">
+                        <Button
+                          type="submit"
+                          className="w-full h-12 text-white font-black text-sm uppercase tracking-wider transition-all cursor-pointer relative overflow-hidden group"
+                          style={{
+                            background: 'rgba(255, 255, 255, 0.28)',
+                            borderRadius: '16px',
+                            boxShadow: '0 4px 30px rgba(0, 0, 0, 0.1)',
+                            backdropFilter: 'blur(13.4px)',
+                            WebkitBackdropFilter: 'blur(13.4px)',
+                            border: '1px solid rgba(255, 255, 255, 0.88)',
+                            color: '#ffffff',
+                          }}
+                          disabled={loading}
                         >
-                          <div className="flex items-start gap-2">
-                            <div className="w-1 h-1 rounded-full bg-red-400 mt-1.5" />
-                            <span>{error}</span>
-                          </div>
-                        </motion.div>
-                      )}
-                      
-                      {success && (
-                        <motion.div
-                          initial={{ opacity: 0, y: -10, height: 0 }}
-                          animate={{ opacity: 1, y: 0, height: 'auto' }}
-                          exit={{ opacity: 0, y: -10, height: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="p-3.5 rounded-xl bg-green-500/10 border border-green-500/30 text-green-300 text-xs backdrop-blur-sm"
-                        >
-                          <div className="flex items-start gap-2">
-                            <div className="w-1 h-1 rounded-full bg-green-400 mt-1.5" />
+                          <span className="relative z-10 flex items-center justify-center gap-2.5">
+                            {loading ? (
+                              <span>Authenticating...</span>
+                            ) : (
+                              <>
+                                <span>{isAr ? "تسجيل الدخول إلى محرر MOON" : "SIGN IN TO TEST MOON"}</span>
+                                <img src={moonLogoWhite} alt="Moon" className="w-5 h-5 object-contain drop-shadow" />
+                              </>
+                            )}
+                          </span>
+                        </Button>
+                      </motion.div>
+                    </form>
+                  )}
+
+                  {/* ===== SIGN UP / REQUEST ACCESS FORM ===== */}
+                  {activeTab === 'signup' && (
+                    <form onSubmit={handleSignupSubmit} className="space-y-3.5">
+                      {/* Username */}
+                      <div className="space-y-1">
+                        <Label className="text-white/85 text-[11px] font-bold block text-right" htmlFor="regUsername">
+                          {isAr ? "اسم المستخدم *" : "User / Username *"}
+                        </Label>
+                        <div className="relative group">
+                          <User className={`absolute ${isAr ? 'right-3.5' : 'left-3.5'} top-3 h-4 w-4 text-white/40 group-focus-within:text-blue-400 transition-colors`} />
+                          <Input
+                            id="regUsername"
+                            value={regUsername}
+                            onChange={(e) => setRegUsername(e.target.value)}
+                            className={`${isAr ? 'pr-10 pl-4 text-right' : 'pl-10 pr-4 text-left'} h-10 bg-black/40 border border-white/15 text-white placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-blue-500/50 rounded-xl text-sm`}
+                            placeholder={isAr ? "مثال: سارة أحمد أو sahmed" : "e.g. Sarah Ahmed or sahmed"}
+                            disabled={loading}
+                            dir={isAr ? "rtl" : "ltr"}
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      {/* Email */}
+                      <div className="space-y-1">
+                        <Label className="text-white/85 text-[11px] font-bold block text-right" htmlFor="regEmail">
+                          {isAr ? "البريد الإلكتروني *" : "EMAIL ADDRESS *"}
+                        </Label>
+                        <div className="relative group">
+                          <Mail className={`absolute ${isAr ? 'right-3.5' : 'left-3.5'} top-3 h-4 w-4 text-white/40 group-focus-within:text-indigo-400 transition-colors`} />
+                          <Input
+                            id="regEmail"
+                            type="email"
+                            value={regEmail}
+                            onChange={(e) => setRegEmail(e.target.value)}
+                            className={`${isAr ? 'pr-10 pl-4 text-right' : 'pl-10 pr-4 text-left'} h-10 bg-black/40 border border-white/15 text-white placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-indigo-500/50 rounded-xl text-sm`}
+                            placeholder={isAr ? "مثال: sarah@library.iq" : "e.g. sarah@library.edu"}
+                            disabled={loading}
+                            dir={isAr ? "rtl" : "ltr"}
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      {/* Institution */}
+                      <div className="space-y-1">
+                        <Label className="text-white/85 text-[11px] font-bold block text-right" htmlFor="regInstitution">
+                          {isAr ? "المؤسسة أو المكتبة أو الجامعة *" : "INSTITUTION / ORGANIZATION *"}
+                        </Label>
+                        <div className="relative group">
+                          <Building2 className={`absolute ${isAr ? 'right-3.5' : 'left-3.5'} top-3 h-4 w-4 text-white/40 group-focus-within:text-cyan-400 transition-colors`} />
+                          <Input
+                            id="regInstitution"
+                            value={regInstitution}
+                            onChange={(e) => setRegInstitution(e.target.value)}
+                            className={`${isAr ? 'pr-10 pl-4 text-right' : 'pl-10 pr-4 text-left'} h-10 bg-black/40 border border-white/15 text-white placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-cyan-500/50 rounded-xl text-sm`}
+                            placeholder={isAr ? "مثال: مكتبة العتبة العباسية، دار الكتب، جامعة بغداد" : "e.g. Library of Congress, Cairo Univ, Sinopia Partner"}
+                            disabled={loading}
+                            dir={isAr ? "rtl" : "ltr"}
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      {/* Password */}
+                      <div className="space-y-1">
+                        <Label className="text-white/85 text-[11px] font-bold block text-right" htmlFor="regPassword">
+                          {isAr ? "كلمة المرور (٦ خانات على الأقل) *" : "PASSWORD (MIN 6 CHARS) *"}
+                        </Label>
+                        <div className="relative group">
+                          <Lock className={`absolute ${isAr ? 'right-3.5' : 'left-3.5'} top-3 h-4 w-4 text-white/40 group-focus-within:text-purple-400 transition-colors`} />
+                          <Input
+                            id="regPassword"
+                            type="password"
+                            value={regPassword}
+                            onChange={(e) => setRegPassword(e.target.value)}
+                            className={`${isAr ? 'pr-10 pl-4 text-right' : 'pl-10 pr-4 text-left'} h-10 bg-black/40 border border-white/15 text-white placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-purple-500/50 rounded-xl text-sm`}
+                            placeholder={isAr ? "أنشئ كلمة المرور" : "Create password"}
+                            disabled={loading}
+                            dir={isAr ? "rtl" : "ltr"}
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      {/* Fast-Approval Code (Optional) */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <Label className="text-white/85 text-[11px] font-bold" htmlFor="regInviteCode">
+                            {isAr ? "رمز الموافقة الفوري VIP (اختياري)" : "VIP APPROVAL CODE (OPTIONAL)"}
+                          </Label>
+                          <span className="text-[10px] text-amber-300 font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-400/30">
+                            {isAr ? "تجاوز قائمة الانتظار للموافقة الفورية" : "Bypasses review queue"}
+                          </span>
+                        </div>
+                        <div className="relative group">
+                          <KeyRound className={`absolute ${isAr ? 'right-3.5' : 'left-3.5'} top-3 h-4 w-4 text-white/40 group-focus-within:text-amber-400 transition-colors`} />
+                          <Input
+                            id="regInviteCode"
+                            value={regInviteCode}
+                            onChange={(e) => setRegInviteCode(e.target.value)}
+                            className={`${isAr ? 'pr-10 pl-4 text-right' : 'pl-10 pr-4 text-left'} h-10 bg-black/40 border border-white/15 text-white placeholder:text-white/30 focus-visible:ring-2 focus-visible:ring-amber-500/50 rounded-xl text-sm`}
+                            placeholder={isAr ? "أدخل الرمز إن كان متوفراً من إسحاق (wolfmoonalqamiisaac)" : "Enter VIP code (wolfmoonalqamiisaac)"}
+                            disabled={loading}
+                            dir={isAr ? "rtl" : "ltr"}
+                          />
+                        </div>
+                      </div>
+
+                      <AnimatePresence mode="wait">
+                        {error && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0 }}
+                            className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-200 text-xs backdrop-blur-md"
+                          >
+                            <div className="flex items-start gap-2">
+                              <XCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+                              <span>{error}</span>
+                            </div>
+                          </motion.div>
+                        )}
+
+                        {pendingApprovalInfo && (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="p-4 rounded-2xl bg-amber-500/15 border border-amber-400/40 text-amber-200 text-xs backdrop-blur-md space-y-2"
+                          >
+                            <div className="flex items-center gap-2 font-bold text-amber-300">
+                              <Clock className="h-4 w-4 animate-spin text-amber-400" />
+                              <span>Awaiting Administrator Approval</span>
+                            </div>
+                            <div className="space-y-1 text-[11px] text-white/80 bg-black/30 p-2.5 rounded-xl border border-white/10 font-mono">
+                              <div><span className="text-white/50">User:</span> {pendingApprovalInfo.user}</div>
+                              <div><span className="text-white/50">Email:</span> {pendingApprovalInfo.email}</div>
+                              <div><span className="text-white/50">Institution:</span> {pendingApprovalInfo.institution}</div>
+                            </div>
+                            <p className="text-[11px] leading-relaxed text-amber-100">
+                              Your request has been dispatched to administrator <strong>Isaac Faleh</strong>. It will appear directly on his admin account for instant approval.
+                            </p>
+                            <a
+                              href={`mailto:isaac@moon.local?subject=${encodeURIComponent(`Moon Editor Access Request: ${pendingApprovalInfo.user}`)}&body=${encodeURIComponent(`Hello Isaac,\n\nA new tester has requested access to the Moon BIBFRAME Editor:\n\nUser: ${pendingApprovalInfo.user}\nEmail: ${pendingApprovalInfo.email}\nInstitution: ${pendingApprovalInfo.institution}\nSubmitted At: ${new Date().toLocaleString()}\n\nPlease approve this request from your Admin account in Moon Studio.\n\nThank you!`)}`}
+                              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-blue-500/30 hover:bg-blue-500/50 border border-blue-400/60 text-white text-xs font-bold transition-all shadow-md cursor-pointer"
+                            >
+                              <Mail className="h-3.5 w-3.5" />
+                              <span>Send Email Notification to Isaac</span>
+                            </a>
+                          </motion.div>
+                        )}
+
+                        {success && !pendingApprovalInfo && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 text-xs backdrop-blur-md flex items-start gap-2"
+                          >
+                            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
                             <span>{success}</span>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
 
-                    <motion.div
-                      whileHover={{ scale: loading ? 1 : 1.01 }}
-                      whileTap={{ scale: loading ? 1 : 0.98 }}
-                      className="pt-2"
-                    >
-                      <Button 
-                        type="submit" 
-                        className="w-full h-12 bg-blue-500/30 backdrop-blur-xl border border-blue-400/50 text-white hover:shadow-[0_0_30px_rgba(59,130,246,0.6)] hover:bg-blue-400/40 transition-all duration-300 font-bold text-lg uppercase tracking-wider rounded-xl disabled:opacity-50 disabled:cursor-not-allowed relative overflow-hidden group"
-                        disabled={loading}
-                      >
-                        {/* Button shimmer effect */}
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
-                        <span className="relative z-10">
-                          {loading ? (
-                            <span className="flex items-center justify-center gap-2">
-                              <motion.span
-                                animate={{ rotate: 360 }}
-                                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                              >
-                                ⚡
-                              </motion.span>
-                              Authenticating...
-                            </span>
-                          ) : (
-                            'START'
-                          )}
-                        </span>
-                      </Button>
-                    </motion.div>
-
-                    {activeTab === 'login' && (
-                      <div className="text-center pt-2">
-                        <button
-                          type="button"
-                          className="text-xs text-white/40 hover:text-white/70 transition-colors underline"
+                      <motion.div whileHover={{ scale: loading ? 1 : 1.01 }} whileTap={{ scale: loading ? 1 : 0.98 }} className="pt-2">
+                        <Button
+                          type="submit"
+                          className="w-full h-11 text-white font-black text-xs uppercase tracking-wider transition-all cursor-pointer"
+                          style={{
+                            background: 'rgba(255, 255, 255, 0.28)',
+                            borderRadius: '16px',
+                            boxShadow: '0 4px 30px rgba(0, 0, 0, 0.1)',
+                            backdropFilter: 'blur(13.4px)',
+                            WebkitBackdropFilter: 'blur(13.4px)',
+                            border: '1px solid rgba(255, 255, 255, 0.88)',
+                            color: '#ffffff',
+                          }}
                           disabled={loading}
                         >
-                          Forgot password?
-                        </button>
-                      </div>
-                    )}
-                  </form>
+                          {loading ? 'Submitting Request...' : (
+                            <span className="flex items-center justify-center gap-2">
+                              <span>{isAr ? "إرسال طلب الانضمام كفاحص" : "SUBMIT TESTER REQUEST"}</span>
+                              <img src={moonLogoWhite} alt="Moon" className="w-4 h-4 object-contain drop-shadow" />
+                            </span>
+                          )}
+                        </Button>
+                      </motion.div>
+                    </form>
+                  )}
                 </Tabs>
 
-                {/* Footer info */}
-                <div className="mt-6 pt-6 border-t border-white/5">
-                  <div className="flex items-center justify-between text-[10px] text-white/30 uppercase tracking-wider">
-                    <span>v3.0.1</span>
-                    <span>Secure Connection</span>
-                  </div>
+                {/* Footer notes */}
+                <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-[10px] text-white/40 uppercase tracking-wider">
+                  <span>BIBFRAME 3.0.1</span>
+                  
                 </div>
               </CardContent>
             </Card>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ===== ADMINISTRATOR APPROVAL PORTAL MODAL ===== */}
+      <AnimatePresence>
+        {showAdminModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/80 backdrop-blur-md"
+              onClick={() => setShowAdminModal(false)}
+            />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-3xl max-h-[85vh] bg-slate-900/90 border border-white/20 rounded-3xl shadow-2xl overflow-hidden flex flex-col z-10"
+            >
+              {/* Header */}
+              <div className="p-6 border-b border-white/10 flex items-center justify-between bg-black/40">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 rounded-2xl bg-amber-500/20 border border-amber-400/40 text-amber-300">
+                    <ShieldCheck className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black text-white">Administrator Approval Center</h2>
+                    <p className="text-xs text-white/60">
+                      Manage tester access requests for Moon Editor (Isaac Faleh)
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setShowAdminModal(false)}
+                  className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-white/60 hover:text-white transition-all cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto p-6">
+                {!isAdminUnlocked ? (
+                  <form onSubmit={handleAdminUnlock} className="max-w-md mx-auto py-8 space-y-4 text-center">
+                    <div className="w-16 h-16 rounded-full bg-amber-500/20 border border-amber-400/40 mx-auto flex items-center justify-center text-amber-300">
+                      <Lock className="h-8 w-8" />
+                    </div>
+                    <h3 className="text-lg font-bold text-white">Administrator Verification</h3>
+                    <p className="text-xs text-white/60">
+                      Enter Isaac's administrator passcode to review and approve testers.
+                    </p>
+                    <div className="relative">
+                      <Input
+                        type="password"
+                        value={adminPasscode}
+                        onChange={(e) => setAdminPasscode(e.target.value)}
+                        placeholder="Enter Super Admin password (Eshak1996)"
+                        className="bg-black/50 border-white/20 text-white text-center text-base tracking-widest h-12 rounded-xl"
+                        autoFocus
+                      />
+                    </div>
+                    {adminError && <p className="text-xs text-rose-400">{adminError}</p>}
+                    <Button
+                      type="submit"
+                      className="w-full h-11 bg-amber-500 hover:bg-amber-400 text-black font-bold uppercase rounded-xl cursor-pointer"
+                    >
+                      Unlock Approval Center
+                    </Button>
+                  </form>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Summary row */}
+                    <div className="flex items-center justify-between pb-3 border-b border-white/10 flex-wrap gap-2">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs font-bold text-white/60">Total Registered:</span>
+                        <span className="text-sm font-black text-white">{adminUsers.length}</span>
+                        <span className="text-xs font-bold text-amber-400 ml-3">Pending Approvals:</span>
+                        <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-black border border-amber-500/30">
+                          {adminUsers.filter((u) => u.status === 'pending').length}
+                        </span>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={refreshAdminUsers}
+                        className="text-xs bg-white/5 border-white/20 text-white hover:bg-white/10"
+                      >
+                        Refresh List
+                      </Button>
+                    </div>
+
+                    {/* Users List */}
+                    <div className="space-y-3">
+                      {adminUsers.map((u) => {
+                        const isPending = u.status === 'pending';
+                        const isApproved = u.status === 'approved';
+                        const isRejected = u.status === 'rejected';
+
+                        return (
+                          <div
+                            key={u.username}
+                            className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                              isPending
+                                ? 'bg-amber-500/10 border-amber-500/30'
+                                : isApproved
+                                ? 'bg-white/5 border-white/10'
+                                : 'bg-rose-500/10 border-rose-500/25'
+                            }`}
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2.5 flex-wrap">
+                                <span className="font-black text-white text-base">{u.username}</span>
+                                {isPending && (
+                                  <span className="px-2 py-0.5 rounded-md bg-amber-400 text-black text-[10px] font-black uppercase tracking-wider animate-pulse">
+                                    Pending Approval
+                                  </span>
+                                )}
+                                {isApproved && (
+                                  <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-[10px] font-bold uppercase tracking-wider">
+                                    Approved
+                                  </span>
+                                )}
+                                {isRejected && (
+                                  <span className="px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-400/30 text-[10px] font-bold uppercase tracking-wider">
+                                    Declined
+                                  </span>
+                                )}
+                                <span className="text-[10px] px-2 py-0.5 rounded bg-white/10 text-white/60 font-mono">
+                                  {u.role}
+                                </span>
+                              </div>
+
+                              <div className="text-xs text-white/70 flex items-center gap-3 flex-wrap">
+                                <span className="flex items-center gap-1">
+                                  <Mail className="h-3.5 w-3.5 text-white/40" />
+                                  {u.email}
+                                </span>
+                                <span className="flex items-center gap-1 text-cyan-300 font-medium">
+                                  <Building2 className="h-3.5 w-3.5 text-cyan-400" />
+                                  {u.institution}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Actions */}
+                            <div className="flex items-center gap-2 shrink-0">
+                              {isPending ? (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleApproveTester(u.username)}
+                                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl h-8 px-3 cursor-pointer"
+                                  >
+                                    <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                                    Approve
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleRejectTester(u.username)}
+                                    className="border-rose-500/40 text-rose-300 hover:bg-rose-500/20 text-xs rounded-xl h-8 px-3 cursor-pointer"
+                                  >
+                                    <XCircle className="h-3.5 w-3.5 mr-1" />
+                                    Reject
+                                  </Button>
+                                </>
+                              ) : isRejected ? (
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApproveTester(u.username)}
+                                  className="bg-emerald-600/80 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl h-8 px-3 cursor-pointer"
+                                >
+                                  Re-Approve
+                                </Button>
+                              ) : null}
+
+                              {u.username !== 'isaac' && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleDeleteTester(u.username)}
+                                  className="text-white/40 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl h-8 w-8 p-0 cursor-pointer"
+                                  title="Delete user"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

@@ -22,13 +22,10 @@ export interface AuthContext extends Context {
 
 /**
  * ✅ PRODUCTION AUTHENTICATION
- * Supports both JWT tokens (production) and X-User-ID (development)
- * 
- * Production: Authorization: Bearer <jwt-token>
- * Development: X-User-ID: <user-id>
+ * Requires a valid Supabase Auth bearer token in every environment.
  */
 export async function requireAuth(c: Context, next: () => Promise<void>) {
-  // Use new JWT authentication (handles fallback to X-User-ID)
+  // Validate the Supabase token and load server-side user permissions.
   return jwtAuth.requireJWTAuth(c, next);
 }
 

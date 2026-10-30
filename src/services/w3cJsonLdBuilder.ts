@@ -2,29 +2,25 @@
  * W3C-Compliant JSON-LD Builder
  * 
  * Produces JSON-LD that passes:
- * - https://json-ld.org/playground/
- * - W3C RDF Validator
+ * - W3C RDF & JSON-LD 1.1 Specifications
+ * - JSON-LD Playground (https://json-ld.org/playground/)
  * - Apache Jena / Fuseki triple store ingestion
- * - Blazegraph / GraphDB import
+ * - Blazegraph / GraphDB / Virtuoso import
  * 
- * Key differences from prototype JSON:
- * 1. Full @context with ALL prefixes used in the document
- * 2. All @type values resolve via @context (bf:Work -> http://id.loc.gov/ontologies/bibframe/Work)
- * 3. All property keys use prefixed names that resolve via @context
- * 4. Literal values use @value/@type or @value/@language
- * 5. URI references use @id
- * 6. Blank nodes use @type but no @id (or use _:bN identifiers)
- * 7. @graph array contains only top-level named nodes
- * 8. No orphan properties, no unresolvable prefixes
- * 
- * Designed by Isaac Faleh for Moon Library System
+ * Key architectural guarantees:
+ * 1. Full @context with all canonical BIBFRAME and Linked Data prefixes
+ * 2. Proper Work -> Expression -> Instance -> Item WEMI graph linkages
+ * 3. Consistent literal ({ "@value": ... }) and node reference ({ "@id": ... }) representation
+ * 4. Comprehensive Structural vs. BIBFRAME Semantic validation engine
+ * 5. High-fidelity Turtle and N-Triples serialization
  */
 
+import { toTurtle, resolvePropertyUri, KNOWN_NAMESPACES } from './rdfGraphBuilder';
+
 // =====================================================
-// COMPLETE BIBFRAME @context
-// This is the canonical context for BIBFRAME 2.x JSON-LD
+// CANONICAL BIBFRAME & LINKED DATA @context
 // =====================================================
-export const BIBFRAME_JSONLD_CONTEXT = {
+export const BIBFRAME_JSONLD_CONTEXT: Record<string, string> = {
   "bf": "http://id.loc.gov/ontologies/bibframe/",
   "bflc": "http://id.loc.gov/ontologies/bflc/",
   "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
@@ -54,18 +50,18 @@ export const BIBFRAME_JSONLD_CONTEXT = {
 // TYPES
 // =====================================================
 
-interface W3CJsonLdNode {
+export interface W3CJsonLdNode {
   "@id": string;
   "@type": string | string[];
   [key: string]: any;
 }
 
-interface W3CJsonLdDocument {
+export interface W3CJsonLdDocument {
   "@context": Record<string, string>;
   "@graph": W3CJsonLdNode[];
 }
 
-interface BuilderInput {
+export interface BuilderInput {
   workData: any;
   instanceData: any;
   itemData?: any;
@@ -81,32 +77,59 @@ interface BuilderInput {
   enableExpression?: boolean;
 }
 
+export interface ValidationSection {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface JsonLdValidationResult {
+  valid: boolean;
+  structural: ValidationSection;
+  semantic: ValidationSection;
+  errors: string[];
+  warnings: string[];
+  info: string[];
+  stats: {
+    nodeCount: number;
+    tripleEstimate: number;
+    prefixesUsed: string[];
+    typesFound: string[];
+    allNodesHaveId: boolean;
+    allNodesHaveType: boolean;
+    contextComplete: boolean;
+    hasWork: boolean;
+    hasInstance: boolean;
+    hasItem: boolean;
+    hasWorkTitle: boolean;
+    hasInstanceTitle: boolean;
+  };
+}
+
 // =====================================================
 // BUILDER
 // =====================================================
 
 /**
  * Build a W3C-compliant JSON-LD document from cataloging data.
- * Every node in @graph has @id and @type.
- * Every property key is a prefixed name resolvable via @context.
- * Every literal uses @value. Every URI ref uses @id.
+ * Guarantees proper WEMI graph links between Work, Expression, Instance, and Item.
  */
 export function buildW3CJsonLd(input: BuilderInput): W3CJsonLdDocument {
   const { workData, instanceData, itemData, expressionData, adminData, uriSet, enableExpression } = input;
   const graph: W3CJsonLdNode[] = [];
 
   // 1. BUILD WORK NODE
-  const workNode = buildWorkNode(workData, uriSet);
+  const workNode = buildWorkNode(workData || {}, uriSet, enableExpression);
   graph.push(workNode);
 
   // 2. BUILD EXPRESSION NODE (optional)
-  if (enableExpression && expressionData) {
-    const exprNode = buildExpressionNode(expressionData, uriSet);
+  if (enableExpression) {
+    const exprNode = buildExpressionNode(expressionData || {}, uriSet);
     graph.push(exprNode);
   }
 
   // 3. BUILD INSTANCE NODE
-  const instanceNode = buildInstanceNode(instanceData, uriSet, enableExpression);
+  const instanceNode = buildInstanceNode(instanceData || {}, uriSet, enableExpression);
   graph.push(instanceNode);
 
   // 4. BUILD ITEM NODE
@@ -127,40 +150,37 @@ export function buildW3CJsonLd(input: BuilderInput): W3CJsonLdDocument {
 // NODE BUILDERS
 // =====================================================
 
-function buildWorkNode(data: any, uriSet: any): W3CJsonLdNode {
+function buildWorkNode(data: any, uriSet: any, enableExpression?: boolean): W3CJsonLdNode {
   const node: W3CJsonLdNode = {
     "@id": uriSet.work,
     "@type": "bf:Work",
-    "bf:hasInstance": { "@id": uriSet.instance }
+    "bf:hasInstance": [{ "@id": uriSet.instance }]
   };
+
+  if (enableExpression) {
+    node["bf:hasExpression"] = [{ "@id": uriSet.expression }];
+  }
 
   // Title
   const title = extractTitle(data);
-  if (title.mainTitle) {
-    node["bf:title"] = [{
-      "@type": "bf:Title",
-      "bf:mainTitle": [{ "@value": title.mainTitle }],
-      ...(title.subtitle ? { "bf:subtitle": [{ "@value": title.subtitle }] } : {}),
-      ...(title.partNumber ? { "bf:partNumber": [{ "@value": title.partNumber }] } : {}),
-      ...(title.partName ? { "bf:partName": [{ "@value": title.partName }] } : {})
-    }];
+  const mainTitleText = title.mainTitle?.trim() || (typeof data["rdfs:label"] === "string" ? data["rdfs:label"].trim() : "") || (typeof data.label === "string" ? data.label.trim() : "") || "Untitled Work / عمل ببليوغرافي";
+  
+  const titleObj: any = {
+    "@type": "bf:Title",
+    "bf:mainTitle": [{ "@value": mainTitleText }]
+  };
+  if (title.subtitle) titleObj["bf:subtitle"] = [{ "@value": title.subtitle }];
+  if (title.partNumber) titleObj["bf:partNumber"] = [{ "@value": title.partNumber }];
+  if (title.partName) titleObj["bf:partName"] = [{ "@value": title.partName }];
+  if (title.nonSortNum !== undefined && title.nonSortNum !== '') {
+    titleObj["bflc:nonSortNum"] = [{ "@value": String(title.nonSortNum) }];
   }
+  node["bf:title"] = [titleObj];
 
   // Contributions
-  const contributions = extractContributions(data);
+  const contributions = extractContributions(data, uriSet.work);
   if (contributions.length > 0) {
-    node["bf:contribution"] = contributions.map((c, idx) => ({
-      "@type": "bf:Contribution",
-      ...(c.isPrimary ? { "@type": ["bf:Contribution", "bflc:PrimaryContribution"] } : {}),
-      "bf:agent": {
-        "@id": c.agentUri || `${uriSet.work}/agent/${idx}`,
-        "@type": c.agentType || "bf:Agent",
-        "rdfs:label": c.agentLabel
-      },
-      "bf:role": {
-        "@id": c.roleUri || "http://id.loc.gov/vocabulary/relators/ctb"
-      }
-    }));
+    node["bf:contribution"] = contributions;
   }
 
   // Language
@@ -177,29 +197,47 @@ function buildWorkNode(data: any, uriSet: any): W3CJsonLdNode {
   const subjects = extractArrayProperty(data, "bf:subject", "subject");
   if (subjects.length > 0) {
     node["bf:subject"] = subjects.map(s => {
-      if (typeof s === "object" && s["@id"]) return { "@id": s["@id"], "@type": s["@type"] || "bf:Topic", "rdfs:label": s["rdfs:label"] };
-      if (typeof s === "object" && s["rdfs:label"]) return { "@type": "bf:Topic", "rdfs:label": s["rdfs:label"] };
+      if (typeof s === "object" && s !== null) {
+        if (s["@id"]) {
+          const res: any = { "@id": s["@id"], "@type": s["@type"] || "bf:Topic" };
+          if (s["rdfs:label"]) res["rdfs:label"] = s["rdfs:label"];
+          return res;
+        }
+        if (s["rdfs:label"]) return { "@type": s["@type"] || "bf:Topic", "rdfs:label": s["rdfs:label"] };
+      }
       return { "@type": "bf:Topic", "rdfs:label": String(s) };
     });
   }
 
   // Genre/Form
-  const genre = extractProperty(data, "bf:genreForm", "genreForm");
-  if (genre) {
-    if (typeof genre === "object" && genre["@id"]) {
-      node["bf:genreForm"] = [{ "@id": genre["@id"], "@type": genre["@type"] || "bf:GenreForm", "rdfs:label": genre["rdfs:label"] }];
-    }
+  const genres = extractArrayProperty(data, "bf:genreForm", "genreForm");
+  if (genres.length > 0) {
+    node["bf:genreForm"] = genres.map(g => {
+      if (typeof g === "object" && g !== null) {
+        if (g["@id"]) return { "@id": g["@id"], "@type": g["@type"] || "bf:GenreForm", ...(g["rdfs:label"] ? { "rdfs:label": g["rdfs:label"] } : {}) };
+        if (g["rdfs:label"]) return { "@type": "bf:GenreForm", "rdfs:label": g["rdfs:label"] };
+      }
+      return { "@type": "bf:GenreForm", "rdfs:label": String(g) };
+    });
   }
 
   // Classification
   const classifications = extractArrayProperty(data, "bf:classification", "classification");
   if (classifications.length > 0) {
-    node["bf:classification"] = classifications.map(c => ({
-      "@type": c["@type"] || "bf:Classification",
-      "bf:classificationPortion": c["bf:classificationPortion"] || c["classificationPortion"] || "",
-      ...(c["bf:source"] ? { "bf:source": { "@id": typeof c["bf:source"] === "object" ? c["bf:source"]["@id"] : c["bf:source"] } } : {}),
-      ...(c["bf:edition"] ? { "bf:edition": c["bf:edition"] } : {})
-    }));
+    node["bf:classification"] = classifications.map(c => {
+      if (typeof c === "object" && c !== null) {
+        return {
+          "@type": c["@type"] || "bf:Classification",
+          "bf:classificationPortion": [{ "@value": c["bf:classificationPortion"] || c["classificationPortion"] || "" }],
+          ...(c["bf:source"] ? { "bf:source": [{ "@id": typeof c["bf:source"] === "object" ? c["bf:source"]["@id"] : c["bf:source"] }] } : {}),
+          ...(c["bf:edition"] ? { "bf:edition": [{ "@value": String(c["bf:edition"]) }] } : {})
+        };
+      }
+      return {
+        "@type": "bf:Classification",
+        "bf:classificationPortion": [{ "@value": String(c) }]
+      };
+    });
   }
 
   // Summary
@@ -220,7 +258,8 @@ function buildWorkNode(data: any, uriSet: any): W3CJsonLdNode {
   // Origin date
   const originDate = extractProperty(data, "bf:originDate", "originDate");
   if (originDate) {
-    node["bf:originDate"] = [{ "@value": String(typeof originDate === "object" ? originDate["@value"] || originDate.value || originDate : originDate), "@type": "xsd:gYear" }];
+    const dateStr = String(typeof originDate === "object" ? originDate["@value"] || originDate.value || originDate : originDate);
+    node["bf:originDate"] = [{ "@value": dateStr, "@type": "xsd:gYear" }];
   }
 
   // Notes
@@ -232,8 +271,17 @@ function buildWorkNode(data: any, uriSet: any): W3CJsonLdNode {
     }));
   }
 
+  // Preserve other custom properties in workData
+  preserveCustomProperties(data, node, [
+    "title", "bf:title", "contribution", "bf:contribution", "language", "bf:language",
+    "subject", "bf:subject", "genreForm", "bf:genreForm", "classification", "bf:classification",
+    "summary", "bf:summary", "content", "bf:content", "originDate", "bf:originDate",
+    "note", "bf:note", "hasInstance", "bf:hasInstance", "hasExpression", "bf:hasExpression",
+    "adminMetadata", "bf:adminMetadata", "id", "uri", "created", "updated", "_type", "_raw"
+  ]);
+
   // Admin metadata reference
-  node["bf:adminMetadata"] = { "@id": uriSet.admin };
+  node["bf:adminMetadata"] = [{ "@id": uriSet.admin }];
 
   return cleanNode(node);
 }
@@ -243,13 +291,18 @@ function buildExpressionNode(data: any, uriSet: any): W3CJsonLdNode {
     "@id": uriSet.expression,
     "@type": "bf:Expression",
     "bf:expressionOf": { "@id": uriSet.work },
-    "bf:hasInstance": { "@id": uriSet.instance }
+    "bf:hasInstance": [{ "@id": uriSet.instance }]
   };
 
   const lang = extractProperty(data, "bf:language", "language");
   if (lang) {
     node["bf:language"] = [typeof lang === "object" && lang["@id"] ? { "@id": lang["@id"] } : { "@id": `http://id.loc.gov/vocabulary/languages/${lang}` }];
   }
+
+  preserveCustomProperties(data, node, [
+    "language", "bf:language", "expressionOf", "bf:expressionOf", "hasInstance", "bf:hasInstance",
+    "id", "uri", "created", "updated", "_type", "_raw"
+  ]);
 
   return cleanNode(node);
 }
@@ -259,18 +312,20 @@ function buildInstanceNode(data: any, uriSet: any, hasExpression?: boolean): W3C
     "@id": uriSet.instance,
     "@type": "bf:Instance",
     "bf:instanceOf": { "@id": hasExpression ? uriSet.expression : uriSet.work },
-    "bf:hasItem": { "@id": uriSet.item }
+    "bf:hasItem": [{ "@id": uriSet.item }]
   };
 
-  // Instance title (may differ from Work title)
+  // Title
   const title = extractTitle(data);
-  if (title.mainTitle) {
-    node["bf:title"] = [{
-      "@type": "bf:Title",
-      "bf:mainTitle": [{ "@value": title.mainTitle }],
-      ...(title.subtitle ? { "bf:subtitle": [{ "@value": title.subtitle }] } : {})
-    }];
-  }
+  const instMain = title.mainTitle?.trim() || "Untitled Instance / وعاء بدون عنوان";
+  const titleObj: any = {
+    "@type": "bf:Title",
+    "bf:mainTitle": [{ "@value": instMain }]
+  };
+  if (title.subtitle) titleObj["bf:subtitle"] = [{ "@value": title.subtitle }];
+  if (title.partNumber) titleObj["bf:partNumber"] = [{ "@value": title.partNumber }];
+  if (title.partName) titleObj["bf:partName"] = [{ "@value": title.partName }];
+  node["bf:title"] = [titleObj];
 
   // Edition statement
   const edition = extractProperty(data, "bf:editionStatement", "editionStatement");
@@ -288,19 +343,19 @@ function buildInstanceNode(data: any, uriSet: any, hasExpression?: boolean): W3C
       const idValue = id["rdf:value"] || id["value"] || id;
       return {
         "@type": idType,
-        "rdf:value": typeof idValue === "object" ? (idValue["@value"] || JSON.stringify(idValue)) : String(idValue)
+        "rdf:value": [{ "@value": typeof idValue === "object" ? (idValue["@value"] || JSON.stringify(idValue)) : String(idValue) }]
       };
     });
   }
 
-  // Provision activity
+  // Provision activity (Publication/Distribution/Manufacture)
   const provisions = extractArrayProperty(data, "bf:provisionActivity", "provisionActivity");
   if (provisions.length > 0) {
     node["bf:provisionActivity"] = provisions.map(p => {
       const prov: any = {
         "@type": p["@type"] || "bf:Publication"
       };
-      // Agent (publisher)
+
       const agent = p["bf:agent"] || p["agent"];
       if (agent) {
         prov["bf:agent"] = {
@@ -309,7 +364,7 @@ function buildInstanceNode(data: any, uriSet: any, hasExpression?: boolean): W3C
           "rdfs:label": agent["rdfs:label"] || ""
         };
       }
-      // Place
+
       const place = p["bf:place"] || p["place"];
       if (place) {
         prov["bf:place"] = {
@@ -318,12 +373,13 @@ function buildInstanceNode(data: any, uriSet: any, hasExpression?: boolean): W3C
           "rdfs:label": place["rdfs:label"] || ""
         };
       }
-      // Date
+
       const date = p["bf:date"] || p["date"];
       if (date) {
         const dateStr = typeof date === "object" ? (date["@value"] || date.value || String(date)) : String(date);
         prov["bf:date"] = [{ "@value": dateStr, "@type": dateStr.length === 4 ? "xsd:gYear" : "xsd:date" }];
       }
+
       return prov;
     });
   }
@@ -374,6 +430,15 @@ function buildInstanceNode(data: any, uriSet: any, hasExpression?: boolean): W3C
     }));
   }
 
+  // Preserve other custom properties
+  preserveCustomProperties(data, node, [
+    "title", "bf:title", "editionStatement", "bf:editionStatement", "responsibilityStatement", "bf:responsibilityStatement",
+    "identifiedBy", "bf:identifiedBy", "provisionActivity", "bf:provisionActivity", "extent", "bf:extent",
+    "dimensions", "bf:dimensions", "carrier", "bf:carrier", "media", "bf:media", "issuance", "bf:issuance",
+    "seriesStatement", "bf:seriesStatement", "copyrightDate", "bf:copyrightDate", "note", "bf:note",
+    "instanceOf", "bf:instanceOf", "hasItem", "bf:hasItem", "id", "uri", "created", "updated", "_type", "_raw"
+  ]);
+
   return cleanNode(node);
 }
 
@@ -404,14 +469,19 @@ function buildItemNode(data: any, uriSet: any): W3CJsonLdNode {
     node["bf:electronicLocator"] = [{ "@id": String(eloc) }];
   }
 
-  // Identifiers
+  // Identifiers / Barcodes
   const identifiers = extractArrayProperty(data, "bf:identifiedBy", "identifiedBy");
   if (identifiers.length > 0) {
     node["bf:identifiedBy"] = identifiers.map(id => ({
       "@type": id["@type"] || "bf:Barcode",
-      "rdf:value": typeof id === "object" ? (id["rdf:value"] || id["value"] || "") : String(id)
+      "rdf:value": [{ "@value": typeof id === "object" ? (id["rdf:value"] || id["value"] || "") : String(id) }]
     }));
   }
+
+  preserveCustomProperties(data, node, [
+    "heldBy", "bf:heldBy", "shelfMark", "bf:shelfMark", "electronicLocator", "bf:electronicLocator",
+    "identifiedBy", "bf:identifiedBy", "itemOf", "bf:itemOf", "id", "uri", "created", "updated", "_type", "_raw"
+  ]);
 
   return cleanNode(node);
 }
@@ -423,17 +493,17 @@ function buildAdminNode(data: any, uriSet: any): W3CJsonLdNode {
     "@type": "bf:AdminMetadata",
     "bf:creationDate": [{ "@value": data["bf:creationDate"] || now.split("T")[0], "@type": "xsd:date" }],
     "bf:changeDate": [{ "@value": now.split("T")[0], "@type": "xsd:date" }],
-    "bf:descriptionConventions": {
+    "bf:descriptionConventions": [{
       "@id": "http://id.loc.gov/vocabulary/descriptionConventions/rda"
-    },
-    "bf:descriptionLanguage": {
+    }],
+    "bf:descriptionLanguage": [{
       "@id": data["bf:descriptionLanguage"]?.["@id"] || "http://id.loc.gov/vocabulary/languages/eng"
-    },
-    "bf:source": data["bf:source"] || {
+    }],
+    "bf:source": [{
       "@id": "https://moonlib.org",
       "@type": "bf:Source",
       "rdfs:label": "Moon Library System"
-    },
+    }],
     "bf:generationProcess": [{
       "@type": "bf:GenerationProcess",
       "rdfs:label": data["bf:generationProcess"] || "Moon BIBFRAME Template v2.0"
@@ -444,27 +514,57 @@ function buildAdminNode(data: any, uriSet: any): W3CJsonLdNode {
 }
 
 // =====================================================
-// HELPERS
+// PROPERTY PRESERVATION & EXTRACTION HELPERS
 // =====================================================
 
-function extractTitle(data: any): { mainTitle: string; subtitle: string; partNumber: string; partName: string } {
-  const t = data["bf:title"] || data["title"];
-  if (!t) return { mainTitle: "", subtitle: "", partNumber: "", partName: "" };
-  
-  // Array of titles -> first one
+function preserveCustomProperties(data: any, targetNode: any, ignoredKeys: string[]) {
+  const ignored = new Set(ignoredKeys);
+
+  for (const [key, value] of Object.entries(data)) {
+    if (ignored.has(key) || key.startsWith("@")) continue;
+    if (value === null || value === undefined || value === "") continue;
+
+    const resolved = resolvePropertyUri(key, BIBFRAME_JSONLD_CONTEXT);
+    const propKey = resolved.tag;
+
+    if (targetNode[propKey]) continue; // Already mapped
+
+    if (Array.isArray(value)) {
+      targetNode[propKey] = value.map(v => formatCustomValue(v));
+    } else {
+      targetNode[propKey] = [formatCustomValue(value)];
+    }
+  }
+}
+
+function formatCustomValue(v: any): any {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    if (v["@id"] || v["@value"]) return v;
+    return v;
+  }
+  if (typeof v === "string" && (v.startsWith("http://") || v.startsWith("https://"))) {
+    return { "@id": v };
+  }
+  return { "@value": String(v) };
+}
+
+function extractTitle(data: any): { mainTitle: string; subtitle: string; partNumber: string; partName: string; nonSortNum: string } {
+  if (!data) return { mainTitle: "", subtitle: "", partNumber: "", partName: "", nonSortNum: "" };
+  const t = data["bf:title"] || data["title"] || data["rdfs:label"] || data["label"];
+  if (!t) return { mainTitle: "", subtitle: "", partNumber: "", partName: "", nonSortNum: "" };
+
   const titleObj = Array.isArray(t) ? t[0] : t;
-  
-  if (typeof titleObj === "string") return { mainTitle: titleObj, subtitle: "", partNumber: "", partName: "" };
-  
-  // Extract mainTitle from various formats
+  if (typeof titleObj === "string") return { mainTitle: titleObj.trim(), subtitle: "", partNumber: "", partName: "", nonSortNum: "" };
+
   let mainTitle = "";
-  const mt = titleObj["bf:mainTitle"] || titleObj["mainTitle"];
+  const mt = titleObj["bf:mainTitle"] || titleObj["mainTitle"] || titleObj["rdfs:label"] || titleObj["label"];
   if (mt) {
-    if (Array.isArray(mt)) mainTitle = mt[0]?.["@value"] || String(mt[0]);
-    else if (typeof mt === "object") mainTitle = mt["@value"] || String(mt);
+    if (Array.isArray(mt)) mainTitle = mt[0]?.["@value"] || mt[0]?.["rdfs:label"] || String(mt[0]);
+    else if (typeof mt === "object") mainTitle = mt["@value"] || mt["rdfs:label"] || String(mt);
     else mainTitle = String(mt);
   }
-  
+
   let subtitle = "";
   const st = titleObj["bf:subtitle"] || titleObj["subtitle"];
   if (st) {
@@ -472,35 +572,41 @@ function extractTitle(data: any): { mainTitle: string; subtitle: string; partNum
     else if (typeof st === "object") subtitle = st["@value"] || String(st);
     else subtitle = String(st);
   }
-  
+
   const partNumber = titleObj["bf:partNumber"] || titleObj["partNumber"] || "";
   const partName = titleObj["bf:partName"] || titleObj["partName"] || "";
-  
-  return { mainTitle, subtitle, partNumber: String(partNumber), partName: String(partName) };
+  const nonSortNum = titleObj["bflc:nonSortNum"] || titleObj["nonSortNum"] || "";
+
+  return { mainTitle, subtitle, partNumber: String(partNumber), partName: String(partName), nonSortNum: String(nonSortNum) };
 }
 
-interface ContributionData {
-  agentUri: string;
-  agentLabel: string;
-  agentType: string;
-  roleUri: string;
-  isPrimary: boolean;
-}
-
-function extractContributions(data: any): ContributionData[] {
+function extractContributions(data: any, workUri: string): any[] {
   const c = data["bf:contribution"] || data["contribution"] || [];
   const arr = Array.isArray(c) ? c : [c];
-  
+
   return arr.filter(Boolean).map((contrib, idx) => {
+    const isPrimary = contrib["@type"] === "bflc:PrimaryContribution" || 
+      (Array.isArray(contrib["@type"]) && contrib["@type"].includes("bflc:PrimaryContribution")) ||
+      idx === 0;
+
     const agent = contrib["bf:agent"] || contrib["agent"] || {};
     const role = contrib["bf:role"] || contrib["role"] || {};
-    
+
+    const agentUri = agent["@id"] || `${workUri}/agent/${idx}`;
+    const agentLabel = agent["rdfs:label"] || agent["label"] || "Unknown";
+    const agentType = agent["@type"] || "bf:Person";
+    const roleUri = role["@id"] || "http://id.loc.gov/vocabulary/relators/ctb";
+
     return {
-      agentUri: agent["@id"] || "",
-      agentLabel: agent["rdfs:label"] || agent["label"] || "Unknown",
-      agentType: agent["@type"] || "bf:Person",
-      roleUri: role["@id"] || "http://id.loc.gov/vocabulary/relators/ctb",
-      isPrimary: idx === 0
+      "@type": isPrimary ? ["bf:Contribution", "bflc:PrimaryContribution"] : "bf:Contribution",
+      "bf:agent": {
+        "@id": agentUri,
+        "@type": agentType,
+        "rdfs:label": agentLabel
+      },
+      "bf:role": [{
+        "@id": roleUri
+      }]
     };
   });
 }
@@ -520,11 +626,6 @@ function cleanNode(node: any): any {
   for (const [key, value] of Object.entries(node)) {
     if (value === null || value === undefined || value === "") continue;
     if (Array.isArray(value) && value.length === 0) continue;
-    if (typeof value === "object" && !Array.isArray(value)) {
-      // Remove empty objects
-      const hasContent = Object.values(value).some(v => v !== null && v !== undefined && v !== "");
-      if (!hasContent && !value["@id"] && !value["@type"]) continue;
-    }
     cleaned[key] = value;
   }
   return cleaned;
@@ -541,206 +642,342 @@ function simpleHash(str: string): string {
 }
 
 // =====================================================
-// VALIDATION
+// VALIDATION ENGINE (STRUCTURAL & BIBFRAME SEMANTIC)
 // =====================================================
 
-export interface JsonLdValidationResult {
-  valid: boolean;
-  errors: string[];
-  warnings: string[];
-  info: string[];
-  stats: {
-    nodeCount: number;
-    tripleEstimate: number;
-    prefixesUsed: string[];
-    typesFound: string[];
-    allNodesHaveId: boolean;
-    allNodesHaveType: boolean;
-    contextComplete: boolean;
-  };
-}
-
 /**
- * Validate JSON-LD document against W3C spec requirements.
- * This catches the issues that would cause failures in:
- * - JSON-LD Playground
- * - RDF validators
- * - Triple store ingestion
+ * Validates a JSON-LD document.
+ * Clearly separates Structural checks (JSON-LD syntax, prefix resolution, URI formatting)
+ * from Semantic checks (WEMI entity presence, reciprocal links, required cataloging properties).
  */
 export function validateW3CJsonLd(doc: any): JsonLdValidationResult {
-  const errors: string[] = [];
-  const warnings: string[] = [];
+  const structuralErrors: string[] = [];
+  const structuralWarnings: string[] = [];
+  const semanticErrors: string[] = [];
+  const semanticWarnings: string[] = [];
   const info: string[] = [];
+
   const prefixesUsed = new Set<string>();
   const typesFound = new Set<string>();
+
   let allNodesHaveId = true;
   let allNodesHaveType = true;
+  let hasWork = false;
+  let hasInstance = false;
+  let hasItem = false;
+  let hasWorkTitle = false;
+  let hasInstanceTitle = false;
 
-  // 1. Must be an object
+  // ── 1. STRUCTURAL CHECKS ──
   if (typeof doc !== "object" || doc === null) {
-    errors.push("Document must be a JSON object");
-    return { valid: false, errors, warnings, info, stats: { nodeCount: 0, tripleEstimate: 0, prefixesUsed: [], typesFound: [], allNodesHaveId: false, allNodesHaveType: false, contextComplete: false } };
+    structuralErrors.push("Document must be a valid JSON object");
+    return createValidationResponse(structuralErrors, structuralWarnings, semanticErrors, semanticWarnings, info, {
+      nodeCount: 0, tripleEstimate: 0, prefixesUsed: [], typesFound: [],
+      allNodesHaveId: false, allNodesHaveType: false, contextComplete: false,
+      hasWork: false, hasInstance: false, hasItem: false, hasWorkTitle: false, hasInstanceTitle: false
+    });
   }
 
-  // 2. Must have @context
-  if (!doc["@context"]) {
-    errors.push("Missing @context - JSON-LD requires @context for prefix resolution");
+  // @context check
+  if (!doc["@context"] || typeof doc["@context"] !== "object") {
+    structuralErrors.push("Missing or invalid @context: must be an object mapping namespace prefixes to URIs");
   } else {
-    // Check context is an object with string values
-    if (typeof doc["@context"] !== "object") {
-      errors.push("@context must be an object mapping prefixes to URIs");
+    for (const [prefix, uri] of Object.entries(doc["@context"])) {
+      if (typeof uri !== "string" || (!uri.startsWith("http://") && !uri.startsWith("https://"))) {
+        structuralErrors.push(`@context prefix "${prefix}" has invalid namespace URI: "${uri}"`);
+      }
+    }
+  }
+
+  // @graph check
+  if (!doc["@graph"] || !Array.isArray(doc["@graph"])) {
+    structuralErrors.push("Missing @graph: root document must contain an array of named resource nodes");
+    return createValidationResponse(structuralErrors, structuralWarnings, semanticErrors, semanticWarnings, info, {
+      nodeCount: 0, tripleEstimate: 0, prefixesUsed: [], typesFound: [],
+      allNodesHaveId: false, allNodesHaveType: false, contextComplete: false,
+      hasWork: false, hasInstance: false, hasItem: false, hasWorkTitle: false, hasInstanceTitle: false
+    });
+  }
+
+  const graph = doc["@graph"];
+  info.push(`Document graph contains ${graph.length} top-level entity node(s)`);
+
+  const declaredContext = doc["@context"] || {};
+
+  // Inspect each node in @graph
+  graph.forEach((node: any, idx: number) => {
+    if (!node || typeof node !== "object") {
+      structuralErrors.push(`Node [${idx}] is not a valid object`);
+      return;
+    }
+
+    // Node @id
+    if (!node["@id"]) {
+      allNodesHaveId = false;
+      structuralErrors.push(`Node [${idx}] missing @id: every named entity in @graph must have an IRI or blank node identifier`);
+    } else if (typeof node["@id"] !== "string") {
+      structuralErrors.push(`Node [${idx}] @id must be a string IRI`);
+    } else if (!node["@id"].startsWith("http://") && !node["@id"].startsWith("https://") && !node["@id"].startsWith("_:")) {
+      structuralErrors.push(`Node [${idx}] @id="${node["@id"]}" must be an absolute HTTP/HTTPS IRI or blank node identifier (_:)`);
+    }
+
+    // Node @type
+    if (!node["@type"]) {
+      allNodesHaveType = false;
+      structuralWarnings.push(`Node [${idx}] (${node["@id"] || "unnamed"}) missing @type`);
     } else {
-      for (const [prefix, uri] of Object.entries(doc["@context"])) {
-        if (typeof uri !== "string") {
-          errors.push(`@context["${prefix}"] must be a string URI, got ${typeof uri}`);
-        } else if (!uri.startsWith("http://") && !uri.startsWith("https://")) {
-          errors.push(`@context["${prefix}"] = "${uri}" is not a valid HTTP(S) URI`);
-        }
-      }
-    }
-  }
-
-  // 3. Must have @graph
-  if (!doc["@graph"]) {
-    errors.push("Missing @graph - document must contain @graph array for named graph");
-  } else if (!Array.isArray(doc["@graph"])) {
-    errors.push("@graph must be an array");
-  } else {
-    const graph = doc["@graph"];
-    info.push(`@graph contains ${graph.length} node(s)`);
-
-    // 4. Validate each node
-    graph.forEach((node: any, idx: number) => {
-      // @id check
-      if (!node["@id"]) {
-        allNodesHaveId = false;
-        errors.push(`Node [${idx}] missing @id - every named node in @graph must have @id`);
-      } else if (typeof node["@id"] !== "string") {
-        errors.push(`Node [${idx}] @id must be a string`);
-      } else if (!node["@id"].startsWith("http://") && !node["@id"].startsWith("https://") && !node["@id"].startsWith("_:")) {
-        errors.push(`Node [${idx}] @id="${node["@id"]}" is not a valid URI or blank node identifier`);
-      }
-
-      // @type check
-      if (!node["@type"]) {
-        allNodesHaveType = false;
-        warnings.push(`Node [${idx}] (${node["@id"] || "unnamed"}) missing @type`);
-      } else {
-        const types = Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]];
-        types.forEach((t: string) => {
-          typesFound.add(t);
-          // Check prefix resolves
-          if (t.includes(":") && !t.startsWith("http")) {
-            const prefix = t.split(":")[0];
-            prefixesUsed.add(prefix);
-            if (doc["@context"] && !doc["@context"][prefix]) {
-              errors.push(`Node [${idx}] uses prefix "${prefix}" in @type="${t}" but prefix not in @context`);
-            }
-          }
-        });
-      }
-
-      // Check all property keys resolve
-      for (const key of Object.keys(node)) {
-        if (key.startsWith("@")) continue; // JSON-LD keywords
-        if (key.includes(":") && !key.startsWith("http")) {
-          const prefix = key.split(":")[0];
+      const types = Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]];
+      types.forEach((t: string) => {
+        typesFound.add(t);
+        if (t.includes(":") && !t.startsWith("http")) {
+          const prefix = t.split(":")[0];
           prefixesUsed.add(prefix);
-          if (doc["@context"] && !doc["@context"][prefix]) {
-            errors.push(`Node [${idx}] property "${key}" uses prefix "${prefix}" not in @context`);
+          if (!declaredContext[prefix]) {
+            structuralErrors.push(`Node [${idx}] uses undeclared prefix "${prefix}" in @type="${t}"`);
           }
-        } else if (!key.startsWith("http")) {
-          warnings.push(`Node [${idx}] property "${key}" has no namespace prefix - may not resolve to a URI`);
         }
-
-        // Validate nested objects
-        validateNestedValue(node[key], key, idx, doc["@context"] || {}, errors, warnings, prefixesUsed);
-      }
-    });
-
-    // 5. Check WEMI structure
-    const hasWork = graph.some((n: any) => {
-      const t = Array.isArray(n["@type"]) ? n["@type"] : [n["@type"]];
-      return t.includes("bf:Work");
-    });
-    const hasInstance = graph.some((n: any) => {
-      const t = Array.isArray(n["@type"]) ? n["@type"] : [n["@type"]];
-      return t.includes("bf:Instance");
-    });
-    const hasItem = graph.some((n: any) => {
-      const t = Array.isArray(n["@type"]) ? n["@type"] : [n["@type"]];
-      return t.includes("bf:Item");
-    });
-
-    if (hasWork) info.push("Contains bf:Work node");
-    else warnings.push("Missing bf:Work node - BIBFRAME requires Work entity");
-
-    if (hasInstance) info.push("Contains bf:Instance node");
-    else warnings.push("Missing bf:Instance node - BIBFRAME requires Instance entity");
-
-    if (hasItem) info.push("Contains bf:Item node");
-    else warnings.push("Missing bf:Item node - recommended for complete BIBFRAME record");
-
-    // Check WEMI links
-    if (hasWork && hasInstance) {
-      const work = graph.find((n: any) => (Array.isArray(n["@type"]) ? n["@type"] : [n["@type"]]).includes("bf:Work"));
-      if (work && !work["bf:hasInstance"]) {
-        errors.push("Work missing bf:hasInstance link to Instance");
-      }
+      });
     }
-    if (hasInstance && hasItem) {
-      const instance = graph.find((n: any) => (Array.isArray(n["@type"]) ? n["@type"] : [n["@type"]]).includes("bf:Instance"));
-      if (instance && !instance["bf:hasItem"]) {
-        warnings.push("Instance missing bf:hasItem link to Item");
+
+    // Properties
+    for (const key of Object.keys(node)) {
+      if (key.startsWith("@")) continue;
+
+      if (key.includes(":") && !key.startsWith("http")) {
+        const prefix = key.split(":")[0];
+        prefixesUsed.add(prefix);
+        if (!declaredContext[prefix]) {
+          structuralErrors.push(`Node [${idx}] property "${key}" uses undeclared prefix "${prefix}"`);
+        }
+      } else if (!key.startsWith("http")) {
+        structuralWarnings.push(`Node [${idx}] property "${key}" lacks a namespace prefix and is unmapped to an ontology`);
       }
+
+      // Check nested values
+      validateNestedValue(node[key], key, idx, declaredContext, structuralErrors, structuralWarnings, prefixesUsed);
+    }
+  });
+
+  // ── 2. BIBFRAME SEMANTIC CHECKS ──
+  const workNode = graph.find((n: any) => nodeHasType(n, "bf:Work"));
+  const instanceNode = graph.find((n: any) => nodeHasType(n, "bf:Instance"));
+  const itemNode = graph.find((n: any) => nodeHasType(n, "bf:Item"));
+
+  hasWork = !!workNode;
+  hasInstance = !!instanceNode;
+  hasItem = !!itemNode;
+
+  if (hasWork) {
+    info.push("Found bf:Work entity");
+  } else {
+    semanticErrors.push("BIBFRAME compliance requires a bf:Work entity");
+  }
+
+  if (hasInstance) {
+    info.push("Found bf:Instance entity");
+  } else {
+    semanticErrors.push("BIBFRAME compliance requires a bf:Instance entity");
+  }
+
+  if (hasItem) {
+    info.push("Found bf:Item entity");
+  } else {
+    semanticWarnings.push("No bf:Item entity present in the graph");
+  }
+
+  // WEMI Linkages
+  if (workNode && instanceNode) {
+    const hasInstLink = hasRefTo(workNode["bf:hasInstance"], instanceNode["@id"]) || 
+                        hasRefTo(workNode["bf:hasExpression"], instanceNode["@id"]);
+    if (!hasInstLink && !workNode["bf:hasInstance"]) {
+      semanticErrors.push("Work entity is missing a bf:hasInstance link to the Instance");
+    }
+
+    const isInstanceOfWork = hasRefTo(instanceNode["bf:instanceOf"], workNode["@id"]);
+    if (!isInstanceOfWork && !instanceNode["bf:instanceOf"]) {
+      semanticErrors.push("Instance entity is missing a bf:instanceOf link to the Work");
     }
   }
 
-  // Context completeness
-  const contextPrefixes = new Set(Object.keys(doc["@context"] || {}));
-  const contextComplete = Array.from(prefixesUsed).every(p => contextPrefixes.has(p));
+  if (instanceNode && itemNode) {
+    const hasItemLink = hasRefTo(instanceNode["bf:hasItem"], itemNode["@id"]);
+    if (!hasItemLink && !instanceNode["bf:hasItem"]) {
+      semanticWarnings.push("Instance entity is missing a bf:hasItem link to the Item");
+    }
+
+    const isItemOfInstance = hasRefTo(itemNode["bf:itemOf"], instanceNode["@id"]);
+    if (!isItemOfInstance && !itemNode["bf:itemOf"]) {
+      semanticErrors.push("Item entity is missing a bf:itemOf link to the Instance");
+    }
+  }
+
+  // Titles
+  if (workNode) {
+    hasWorkTitle = nodeHasMainTitle(workNode, graph);
+    if (!hasWorkTitle) {
+      semanticErrors.push("Work entity must contain a bf:title with bf:mainTitle");
+    }
+  }
+
+  if (instanceNode) {
+    hasInstanceTitle = nodeHasMainTitle(instanceNode, graph);
+    if (!hasInstanceTitle) {
+      semanticWarnings.push("Instance entity is missing a distinct bf:title");
+    }
+  }
 
   // Estimate triples
   let tripleEstimate = 0;
-  if (doc["@graph"] && Array.isArray(doc["@graph"])) {
-    doc["@graph"].forEach((node: any) => {
-      tripleEstimate++; // rdf:type triple
-      for (const key of Object.keys(node)) {
-        if (key.startsWith("@")) continue;
-        const val = node[key];
-        if (Array.isArray(val)) tripleEstimate += val.length;
-        else tripleEstimate++;
-      }
-    });
-  }
+  graph.forEach((node: any) => {
+    tripleEstimate++; // type triple
+    for (const key of Object.keys(node)) {
+      if (key.startsWith("@")) continue;
+      const val = node[key];
+      if (Array.isArray(val)) tripleEstimate += val.length;
+      else tripleEstimate++;
+    }
+  });
 
-  return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
+  const contextComplete = Array.from(prefixesUsed).every(p => !!declaredContext[p]);
+
+  return createValidationResponse(
+    structuralErrors, structuralWarnings,
+    semanticErrors, semanticWarnings,
     info,
-    stats: {
-      nodeCount: doc["@graph"]?.length || 0,
+    {
+      nodeCount: graph.length,
       tripleEstimate,
       prefixesUsed: Array.from(prefixesUsed),
       typesFound: Array.from(typesFound),
       allNodesHaveId,
       allNodesHaveType,
-      contextComplete
+      contextComplete,
+      hasWork,
+      hasInstance,
+      hasItem,
+      hasWorkTitle,
+      hasInstanceTitle
     }
+  );
+}
+
+function createValidationResponse(
+  structuralErrors: string[],
+  structuralWarnings: string[],
+  semanticErrors: string[],
+  semanticWarnings: string[],
+  info: string[],
+  stats: any
+): JsonLdValidationResult {
+  const structuralValid = structuralErrors.length === 0;
+  const semanticValid = semanticErrors.length === 0;
+  const overallValid = structuralValid && semanticValid;
+
+  return {
+    valid: overallValid,
+    structural: {
+      valid: structuralValid,
+      errors: structuralErrors,
+      warnings: structuralWarnings
+    },
+    semantic: {
+      valid: semanticValid,
+      errors: semanticErrors,
+      warnings: semanticWarnings
+    },
+    errors: [...structuralErrors, ...semanticErrors],
+    warnings: [...structuralWarnings, ...semanticWarnings],
+    info,
+    stats
   };
 }
 
-function validateNestedValue(value: any, parentKey: string, nodeIdx: number, context: Record<string, string>, errors: string[], warnings: string[], prefixesUsed: Set<string>) {
+function nodeHasType(node: any, targetType: string): boolean {
+  if (!node || !node["@type"]) return false;
+  const types = Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]];
+  return types.includes(targetType);
+}
+
+function hasRefTo(linkVal: any, targetUri: string): boolean {
+  if (!linkVal || !targetUri) return false;
+  if (Array.isArray(linkVal)) {
+    return linkVal.some(item => hasRefTo(item, targetUri));
+  }
+  if (typeof linkVal === "object") {
+    return linkVal["@id"] === targetUri;
+  }
+  return linkVal === targetUri;
+}
+
+function nodeHasMainTitle(node: any, graph?: any[]): boolean {
+  if (!node) return false;
+  // Direct label check on node
+  if (typeof node["rdfs:label"] === "string" && node["rdfs:label"].trim().length > 0) return true;
+  if (typeof node["label"] === "string" && node["label"].trim().length > 0) return true;
+
+  const titles = node["bf:title"] || node["title"];
+  if (!titles) {
+    // Check if graph contains a Title node associated with or matching this entity
+    if (graph && Array.isArray(graph)) {
+      const titleNode = graph.find(n => n && (n["@type"] === "bf:Title" || (Array.isArray(n["@type"]) && n["@type"].includes("bf:Title"))));
+      if (titleNode) {
+        const mt = titleNode["bf:mainTitle"] || titleNode["mainTitle"] || titleNode["rdfs:label"];
+        if (typeof mt === "string" && mt.trim().length > 0) return true;
+      }
+    }
+    return false;
+  }
+  const titleArr = Array.isArray(titles) ? titles : [titles];
+  return titleArr.some(t => {
+    if (typeof t === "string" && t.trim().length > 0) {
+      if (graph && Array.isArray(graph)) {
+        const refNode = graph.find(n => n && n["@id"] === t.trim());
+        if (refNode) {
+          const mt = refNode["bf:mainTitle"] || refNode["mainTitle"] || refNode["rdfs:label"];
+          if (typeof mt === "string" && mt.trim().length > 0) return true;
+        }
+      }
+      return true;
+    }
+    if (typeof t === "object" && t !== null) {
+      // If reference object with @id
+      if (t["@id"] && graph && Array.isArray(graph)) {
+        const refNode = graph.find(n => n && n["@id"] === t["@id"]);
+        if (refNode) {
+          const mt = refNode["bf:mainTitle"] || refNode["mainTitle"] || refNode["rdfs:label"];
+          if (typeof mt === "string" && mt.trim().length > 0) return true;
+        }
+      }
+      const mt = t["bf:mainTitle"] || t["mainTitle"] || t["rdfs:label"];
+      if (typeof mt === "string" && mt.trim().length > 0) return true;
+      if (Array.isArray(mt) && mt.length > 0) {
+        const first = mt[0];
+        if (typeof first === "string" && first.trim().length > 0) return true;
+        if (typeof first === "object" && first?.["@value"]?.trim()?.length > 0) return true;
+      }
+      if (typeof mt === "object" && mt?.["@value"]?.trim()?.length > 0) return true;
+    }
+    return false;
+  });
+}
+
+function validateNestedValue(
+  value: any,
+  parentKey: string,
+  nodeIdx: number,
+  context: Record<string, string>,
+  errors: string[],
+  warnings: string[],
+  prefixesUsed: Set<string>
+) {
   if (value === null || value === undefined) return;
-  
+
   if (Array.isArray(value)) {
     value.forEach((v, i) => validateNestedValue(v, `${parentKey}[${i}]`, nodeIdx, context, errors, warnings, prefixesUsed));
     return;
   }
-  
+
   if (typeof value === "object") {
-    // Check nested @type
     if (value["@type"]) {
       const types = Array.isArray(value["@type"]) ? value["@type"] : [value["@type"]];
       types.forEach((t: string) => {
@@ -748,269 +985,150 @@ function validateNestedValue(value: any, parentKey: string, nodeIdx: number, con
           const prefix = t.split(":")[0];
           prefixesUsed.add(prefix);
           if (!context[prefix]) {
-            errors.push(`Nested object at [${nodeIdx}].${parentKey} uses prefix "${prefix}" in @type="${t}" not in @context`);
+            errors.push(`Nested object at [${nodeIdx}].${parentKey} uses undeclared prefix "${prefix}" in @type="${t}"`);
           }
         }
       });
     }
-    
+
+    if (value["@value"] !== undefined) {
+      if (value["@language"]) {
+        const lang = String(value["@language"]);
+        if (!/^[a-zA-Z]{1,8}(-[a-zA-Z0-9]{1,8})*$/.test(lang)) {
+          warnings.push(`Literal at [${nodeIdx}].${parentKey} has non-standard language tag "${lang}"`);
+        }
+      }
+    }
+
     for (const key of Object.keys(value)) {
       if (key.startsWith("@")) continue;
       if (key.includes(":") && !key.startsWith("http")) {
         const prefix = key.split(":")[0];
         prefixesUsed.add(prefix);
         if (!context[prefix]) {
-          errors.push(`Nested property "${key}" at [${nodeIdx}].${parentKey} uses prefix "${prefix}" not in @context`);
+          errors.push(`Nested property [${nodeIdx}].${parentKey}.${key} uses undeclared prefix "${prefix}"`);
         }
       }
+      validateNestedValue(value[key], `${parentKey}.${key}`, nodeIdx, context, errors, warnings, prefixesUsed);
     }
   }
 }
 
 // =====================================================
-// TURTLE SERIALIZER (W3C-compliant)
+// TURTLE & N-TRIPLES SERIALIZERS
 // =====================================================
 
 /**
- * Convert W3C JSON-LD to Turtle RDF.
- * Uses @context for prefix declarations.
+ * Convert W3C JSON-LD Document to valid W3C Turtle
  */
 export function jsonLdToTurtle(doc: W3CJsonLdDocument): string {
-  const lines: string[] = [];
-  const context = doc["@context"] || {};
-
-  // Prefix declarations
-  for (const [prefix, uri] of Object.entries(context)) {
-    lines.push(`@prefix ${prefix}: <${uri}> .`);
-  }
-  lines.push("");
-
-  // Nodes
-  const graph = doc["@graph"] || [];
-  for (const node of graph) {
-    lines.push(nodeToTurtle(node, context));
-    lines.push("");
-  }
-
-  return lines.join("\n");
+  return toTurtle(doc);
 }
 
-function nodeToTurtle(node: any, context: Record<string, string>): string {
-  const lines: string[] = [];
-  const subject = node["@id"] ? `<${node["@id"]}>` : "[]";
-
-  // Collect properties
-  const props: string[] = [];
-
-  // @type
-  if (node["@type"]) {
-    const types = Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]];
-    props.push(`    a ${types.map((t: string) => expandForTurtle(t, context)).join(", ")}`);
-  }
-
-  // Other properties
-  for (const [key, value] of Object.entries(node)) {
-    if (key.startsWith("@")) continue;
-    const predicate = expandForTurtle(key, context);
-    const objects = Array.isArray(value) ? value : [value];
-    const objectStrs = objects.map(v => valueToTurtleStr(v, context)).filter(Boolean);
-    if (objectStrs.length > 0) {
-      props.push(`    ${predicate} ${objectStrs.join(", ")}`);
-    }
-  }
-
-  if (props.length > 0) {
-    lines.push(`${subject}`);
-    lines.push(props.join(" ;\n") + " .");
-  }
-
-  return lines.join("\n");
-}
-
-function valueToTurtleStr(value: any, context: Record<string, string>): string {
-  if (value === null || value === undefined) return "";
-
-  // Typed literal
-  if (typeof value === "object" && value["@value"] !== undefined) {
-    const escaped = String(value["@value"]).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
-    if (value["@type"]) return `"${escaped}"^^${expandForTurtle(value["@type"], context)}`;
-    if (value["@language"]) return `"${escaped}"@${value["@language"]}`;
-    return `"${escaped}"`;
-  }
-
-  // URI reference
-  if (typeof value === "object" && value["@id"]) {
-    if (Object.keys(value).length === 1) {
-      // Pure URI ref
-      return `<${value["@id"]}>`;
-    }
-    // Inline blank node with @id - just reference the URI
-    return `<${value["@id"]}>`;
-  }
-
-  // Blank node (object with @type but no @id)
-  if (typeof value === "object" && value["@type"]) {
-    const innerProps: string[] = [];
-    innerProps.push(`a ${expandForTurtle(Array.isArray(value["@type"]) ? value["@type"][0] : value["@type"], context)}`);
-    for (const [k, v] of Object.entries(value)) {
-      if (k.startsWith("@")) continue;
-      const pred = expandForTurtle(k, context);
-      const vals = Array.isArray(v) ? v : [v];
-      const objStrs = vals.map(vv => valueToTurtleStr(vv, context)).filter(Boolean);
-      if (objStrs.length > 0) innerProps.push(`${pred} ${objStrs.join(", ")}`);
-    }
-    return `[\n        ${innerProps.join(" ;\n        ")}\n    ]`;
-  }
-
-  // Plain object
-  if (typeof value === "object") {
-    return `"${JSON.stringify(value).replace(/"/g, '\\"')}"`;
-  }
-
-  // String
-  if (typeof value === "string") {
-    if (value.startsWith("http://") || value.startsWith("https://")) return `<${value}>`;
-    return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
-  }
-
-  // Number/Boolean
-  return String(value);
-}
-
-function expandForTurtle(term: string, context: Record<string, string>): string {
-  if (term.startsWith("http://") || term.startsWith("https://")) return `<${term}>`;
-  if (term.includes(":")) {
-    const [prefix] = term.split(":");
-    if (context[prefix]) return term; // Prefixed name is valid in Turtle
-  }
-  return term;
-}
-
-// =====================================================
-// N-TRIPLES SERIALIZER
-// =====================================================
-
+/**
+ * Convert W3C JSON-LD Document to standard N-Triples
+ */
 export function jsonLdToNTriples(doc: W3CJsonLdDocument): string {
-  const context = doc["@context"] || {};
+  const context = doc["@context"] || BIBFRAME_JSONLD_CONTEXT;
   const lines: string[] = [];
   const graph = doc["@graph"] || [];
   let blankNodeCounter = 0;
 
+  function fmtSubject(s: string): string {
+    if (s.startsWith("_:")) return s;
+    return `<${s}>`;
+  }
+
+  function expandUri(term: string): string {
+    if (term.startsWith("http://") || term.startsWith("https://")) return term;
+    if (term.startsWith("_:")) return term;
+    if (term.includes(":")) {
+      const [prefix, ...rest] = term.split(":");
+      const local = rest.join(":");
+      if (context[prefix]) return `${context[prefix]}${local}`;
+    }
+    return `http://id.loc.gov/ontologies/bibframe/${term}`;
+  }
+
   for (const node of graph) {
     const subject = node["@id"];
     if (!subject) continue;
+    const subStr = fmtSubject(subject);
 
     // rdf:type
     if (node["@type"]) {
       const types = Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]];
       for (const t of types) {
-        lines.push(`<${subject}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${expandUri(t, context)}> .`);
+        lines.push(`${subStr} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${expandUri(t)}> .`);
       }
     }
 
     // Properties
     for (const [key, value] of Object.entries(node)) {
       if (key.startsWith("@")) continue;
-      const predUri = expandUri(key, context);
+      const predUri = expandUri(key);
       const values = Array.isArray(value) ? value : [value];
 
       for (const val of values) {
-        const triple = valueToNTriple(subject, predUri, val, context, () => `_:b${blankNodeCounter++}`, lines);
-        if (triple) lines.push(triple);
+        emitNTriple(subStr, predUri, val, lines, () => `_:b${blankNodeCounter++}`);
       }
     }
+  }
+
+  function emitNTriple(subStr: string, predicate: string, val: any, extraLines: string[], nextBnode: () => string) {
+    if (val === null || val === undefined) return;
+
+    if (typeof val === "object" && val["@value"] !== undefined) {
+      const escaped = String(val["@value"]).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+      if (val["@type"]) {
+        extraLines.push(`${subStr} <${predicate}> "${escaped}"^^<${expandUri(val["@type"])}> .`);
+      } else if (val["@language"]) {
+        extraLines.push(`${subStr} <${predicate}> "${escaped}"@${val["@language"]} .`);
+      } else {
+        extraLines.push(`${subStr} <${predicate}> "${escaped}" .`);
+      }
+      return;
+    }
+
+    if (typeof val === "object" && val["@id"]) {
+      const objId = val["@id"];
+      const objStr = fmtSubject(objId.startsWith("http") ? objId : expandUri(objId));
+      extraLines.push(`${subStr} <${predicate}> ${objStr} .`);
+      return;
+    }
+
+    if (typeof val === "object" && val !== null) {
+      const bnodeId = nextBnode();
+      extraLines.push(`${subStr} <${predicate}> ${bnodeId} .`);
+      if (val["@type"]) {
+        const types = Array.isArray(val["@type"]) ? val["@type"] : [val["@type"]];
+        types.forEach((t: string) => {
+          extraLines.push(`${bnodeId} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${expandUri(t)}> .`);
+        });
+      }
+      for (const [k, v] of Object.entries(val)) {
+        if (k.startsWith("@")) continue;
+        const pUri = expandUri(k);
+        const vs = Array.isArray(v) ? v : [v];
+        vs.forEach(vv => emitNTriple(bnodeId, pUri, vv, extraLines, nextBnode));
+      }
+      return;
+    }
+
+    if (typeof val === "string") {
+      if (val.startsWith("http://") || val.startsWith("https://")) {
+        extraLines.push(`${subStr} <${predicate}> <${val}> .`);
+      } else if (val.startsWith("_:")) {
+        extraLines.push(`${subStr} <${predicate}> ${val} .`);
+      } else {
+        const escaped = val.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+        extraLines.push(`${subStr} <${predicate}> "${escaped}" .`);
+      }
+      return;
+    }
+
+    extraLines.push(`${subStr} <${predicate}> "${String(val)}" .`);
   }
 
   return lines.join("\n");
-}
-
-function valueToNTriple(subject: string, predicate: string, value: any, context: Record<string, string>, genBlank: () => string, extraLines: string[]): string | null {
-  if (value === null || value === undefined) return null;
-
-  // Typed literal
-  if (typeof value === "object" && value["@value"] !== undefined) {
-    const escaped = String(value["@value"]).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r");
-    if (value["@type"]) {
-      return `<${subject}> <${predicate}> "${escaped}"^^<${expandUri(value["@type"], context)}> .`;
-    }
-    if (value["@language"]) {
-      return `<${subject}> <${predicate}> "${escaped}"@${value["@language"]} .`;
-    }
-    return `<${subject}> <${predicate}> "${escaped}" .`;
-  }
-
-  // URI reference
-  if (typeof value === "object" && value["@id"]) {
-    const objUri = value["@id"].startsWith("http") ? value["@id"] : expandUri(value["@id"], context);
-    // If it has more properties, also emit those as separate triples
-    const otherKeys = Object.keys(value).filter(k => !k.startsWith("@"));
-    if (otherKeys.length > 0) {
-      // Emit the link
-      extraLines.push(`<${subject}> <${predicate}> <${objUri}> .`);
-      // Emit the nested node's properties
-      if (value["@type"]) {
-        const types = Array.isArray(value["@type"]) ? value["@type"] : [value["@type"]];
-        for (const t of types) {
-          extraLines.push(`<${objUri}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${expandUri(t, context)}> .`);
-        }
-      }
-      for (const k of otherKeys) {
-        const v = value[k];
-        const pUri = expandUri(k, context);
-        const vals = Array.isArray(v) ? v : [v];
-        for (const vv of vals) {
-          const t = valueToNTriple(objUri, pUri, vv, context, genBlank, extraLines);
-          if (t) extraLines.push(t);
-        }
-      }
-      return null; // Already added
-    }
-    return `<${subject}> <${predicate}> <${objUri}> .`;
-  }
-
-  // Blank node (object with @type but no @id)
-  if (typeof value === "object" && value["@type"]) {
-    const bnode = genBlank();
-    extraLines.push(`<${subject}> <${predicate}> ${bnode} .`);
-    const types = Array.isArray(value["@type"]) ? value["@type"] : [value["@type"]];
-    for (const t of types) {
-      extraLines.push(`${bnode} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${expandUri(t, context)}> .`);
-    }
-    for (const [k, v] of Object.entries(value)) {
-      if (k.startsWith("@")) continue;
-      const pUri = expandUri(k, context);
-      const vals = Array.isArray(v) ? v : [v];
-      for (const vv of vals) {
-        const t = valueToNTriple(bnode.startsWith("_:") ? bnode : `<${bnode}>`, pUri, vv, context, genBlank, extraLines);
-        if (t) extraLines.push(t);
-      }
-    }
-    return null;
-  }
-
-  // String
-  if (typeof value === "string") {
-    if (value.startsWith("http://") || value.startsWith("https://")) {
-      return `<${subject}> <${predicate}> <${value}> .`;
-    }
-    const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
-    return `<${subject}> <${predicate}> "${escaped}" .`;
-  }
-
-  // Number
-  if (typeof value === "number") {
-    return `<${subject}> <${predicate}> "${value}"^^<http://www.w3.org/2001/XMLSchema#${Number.isInteger(value) ? "integer" : "decimal"}> .`;
-  }
-
-  return null;
-}
-
-function expandUri(term: string, context: Record<string, string>): string {
-  if (term.startsWith("http://") || term.startsWith("https://")) return term;
-  if (term.includes(":")) {
-    const [prefix, ...rest] = term.split(":");
-    const localName = rest.join(":");
-    if (context[prefix]) return context[prefix] + localName;
-  }
-  return term;
 }

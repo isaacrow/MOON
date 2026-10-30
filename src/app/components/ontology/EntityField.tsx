@@ -146,7 +146,15 @@ export function EntityField({ property, value, onChange, language = 'en', type }
                 type="button"
                 onClick={handleIsbnLookup}
                 disabled={isLoading || !value?.isbn?.trim()}
-                className="px-3 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white rounded-md text-sm font-semibold flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm whitespace-nowrap"
+                className="px-4 py-2 hover:scale-105 active:scale-95 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-all whitespace-nowrap cursor-pointer"
+                style={{
+                  borderRadius: '120px',
+                  background: 'rgba(255, 255, 255, 0.21)',
+                  backdropFilter: 'blur(4.5px) blur(9px) saturate(1.5) brightness(1.1)',
+                  WebkitBackdropFilter: 'blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)',
+                  boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.15), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.2), 0 8px 32px rgba(0, 0, 0, 0.2)',
+                  border: '1px solid rgba(255, 255, 255, 0.4)'
+                }}
               >
                 {isLoading ? (
                   <><Loader2 className="h-4 w-4 animate-spin" /> Looking up...</>
@@ -173,7 +181,7 @@ export function EntityField({ property, value, onChange, language = 'en', type }
           <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg">
             <div className="flex items-center gap-2 mb-2">
               <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <span className="text-sm font-semibold text-green-700 dark:text-green-400">ISBN Auto-Fill Complete</span>
+              <span className="text-sm font-semibold text-green-700 dark:text-green-400">{language === "ar" ? "اكتمل الملء التلقائي للردمك بنجاح" : "ISBN Auto-Fill Complete"}</span>
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-gray-300">
               {isbnData.title && (
@@ -197,7 +205,7 @@ export function EntityField({ property, value, onChange, language = 'en', type }
             </div>
             <div className="mt-2 flex items-center gap-1.5 text-xs text-purple-600 dark:text-purple-400">
               <Sparkles className="h-3 w-3" />
-              <span>Work &amp; Instance fields updated automatically</span>
+              <span>{language === "ar" ? "تم تحديث حقول العمل والتجسيدة تلقائياً" : "Work & Instance fields updated automatically"}</span>
             </div>
           </div>
         )}

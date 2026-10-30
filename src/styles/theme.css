@@ -138,6 +138,28 @@
     font-size: var(--font-size);
   }
 
+  html[lang="ar"],
+  html[dir="rtl"],
+  [dir="rtl"],
+  :lang(ar) {
+    font-family: 'Cairo', 'IBM Plex Sans Arabic', 'Tajawal', system-ui, -apple-system, sans-serif !important;
+    direction: rtl;
+    text-align: right;
+  }
+
+  [dir="rtl"] input,
+  [dir="rtl"] textarea,
+  [dir="rtl"] select {
+    text-align: right;
+    direction: rtl;
+  }
+
+  [dir="rtl"] input::placeholder,
+  [dir="rtl"] textarea::placeholder {
+    text-align: right;
+    direction: rtl;
+  }
+
   h1 {
     font-size: var(--text-2xl);
     font-weight: var(--font-weight-medium);

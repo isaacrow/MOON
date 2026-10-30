@@ -5,7 +5,7 @@
 
 import { projectId, publicAnonKey } from '../../utils/supabase/info';
 
-const API_BASE = `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/api/records`;
+const API_BASE = `/api/records`;
 
 export interface RecordMetadata {
   id: string;

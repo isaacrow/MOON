@@ -235,7 +235,7 @@ export function ContributionEditorModal({ value, onChange, onClose, triggerRect 
   const { t } = useTranslation();
 
   const handleSave = () => {
-    onChange({
+    const newContrib = {
       '@type': 'bf:Contribution',
       'bf:agent': {
         '@type': 'bf:Person',
@@ -248,7 +248,14 @@ export function ContributionEditorModal({ value, onChange, onClose, triggerRect 
       },
       agent: contribution.agent,
       role: contribution.role
-    });
+    };
+    if (Array.isArray(value)) {
+      onChange([...value, newContrib]);
+    } else if (value && typeof value === 'object' && Object.keys(value).length > 0) {
+      onChange([value, newContrib]);
+    } else {
+      onChange([newContrib]);
+    }
     onClose();
   };
 

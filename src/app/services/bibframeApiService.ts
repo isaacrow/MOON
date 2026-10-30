@@ -86,8 +86,7 @@ class BibframeApiService {
       return result;
     } catch (error) {
       console.error('Error searching LOC names:', error);
-      // Return mock data as fallback
-      return this.getMockNameResults(query, type, limit);
+      throw error;
     }
   }
 
@@ -129,7 +128,7 @@ class BibframeApiService {
       return result;
     } catch (error) {
       console.error('Error searching LOC subjects:', error);
-      return this.getMockSubjectResults(query, limit);
+      throw error;
     }
   }
 
@@ -171,7 +170,7 @@ class BibframeApiService {
       return result;
     } catch (error) {
       console.error('Error searching LOC genre/forms:', error);
-      return this.getMockGenreFormResults(query, limit);
+      throw error;
     }
   }
 
@@ -213,7 +212,7 @@ class BibframeApiService {
       return result;
     } catch (error) {
       console.error('Error searching LOC geographic:', error);
-      return this.getMockGeographicResults(query, limit);
+      throw error;
     }
   }
 

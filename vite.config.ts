@@ -45,6 +45,31 @@ export default defineConfig({
     },
   },
 
+  server: {
+    open: true,
+    proxy: {
+      '/okapi': {
+        target: 'http://localhost:9130',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/okapi/, ''),
+      },
+      '/vufind': {
+        target: 'http://localhost:8085',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/vufind/, ''),
+      },
+      '/solr': {
+        target: 'http://localhost:8983',
+        changeOrigin: true,
+      },
+      '/bcld-api': {
+        target: 'https://dev.bcld.info/api',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/bcld-api/, ''),
+      },
+    },
+  },
+
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 

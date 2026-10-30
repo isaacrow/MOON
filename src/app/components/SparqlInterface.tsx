@@ -57,11 +57,11 @@ ORDER BY DESC(?count)`
 export function SparqlInterface() {
   const [config, setConfig] = useState<TripleStoreConfig>({
     type: 'fuseki',
-    endpoint: 'http://localhost:3030/moon/sparql',
-    updateEndpoint: 'http://localhost:3030/moon/update'
+    endpoint: 'http://localhost:8080/sparql',
+    updateEndpoint: 'http://localhost:8080/sparql'
   });
   
-  const [query, setQuery] = useState(EXAMPLE_QUERIES.listWorks);
+  const [query, setQuery] = useState(`PREFIX bf: <http://id.loc.gov/ontologies/bibframe/>\nSELECT ?s ?p ?o WHERE {\n  ?s ?p ?o .\n} LIMIT 50`);
   const [results, setResults] = useState<any>(null);
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,24 +72,34 @@ export function SparqlInterface() {
     setResults(null);
 
     try {
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/moon/sparql/query`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${publicAnonKey}`
-          },
-          body: JSON.stringify({ query, config })
+      const endpoints = ['/sparql', config.endpoint || 'http://localhost:8080/sparql'];
+      let data: any = null;
+      let lastErr = '';
+      for (const ep of endpoints) {
+        try {
+          const response = await fetch(ep, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ query })
+          });
+          if (response.ok) {
+            data = await response.json();
+            break;
+          } else {
+            const errJson = await response.json().catch(() => ({}));
+            lastErr = errJson.error || errJson.details || `HTTP ${response.status}`;
+          }
+        } catch (e: any) {
+          lastErr = e.message;
         }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.details || 'Query failed');
       }
 
-      const data = await response.json();
+      if (!data) {
+        throw new Error(lastErr || 'Query failed');
+      }
+
       setResults(data);
     } catch (err) {
       console.error('SPARQL query error:', err);

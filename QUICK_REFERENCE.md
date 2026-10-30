@@ -1,5 +1,7 @@
 # 🚀 MOON Security Quick Reference
 
+> **Outdated instructions:** examples using `X-User-ID` and `/setup-demo` no longer match the server. Protected routes require a valid Supabase bearer token; do not use this guide for deployment.
+
 ## TL;DR - What Changed
 
 **ALL 4 CRITICAL PRIORITIES IMPLEMENTED:**

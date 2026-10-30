@@ -1,0 +1,489 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Parser as N3Parser } from 'n3';
+import { toTurtle, toRdfXml, resolvePropertyUri, KNOWN_NAMESPACES } from '../src/services/rdfGraphBuilder';
+import { buildW3CJsonLd, validateW3CJsonLd, jsonLdToTurtle, jsonLdToNTriples, BIBFRAME_JSONLD_CONTEXT } from '../src/services/w3cJsonLdBuilder';
+import { realLocExamples } from '../src/app/utils/realLocExamples';
+import { FOLIOApiClient, FOLIO_PRESETS } from '../src/app/services/folioApiClient';
+import { VuFindApiClient, VUFIND_PRESETS } from '../src/app/services/vufindApiClient';
+
+// Helper to parse Turtle with N3 parser to guarantee syntactic validity
+function parseTurtle(turtleStr: string): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    const parser = new N3Parser();
+    const quads: any[] = [];
+    parser.parse(turtleStr, (error, quad) => {
+      if (error) {
+        reject(error);
+      } else if (quad) {
+        quads.push(quad);
+      } else {
+        resolve(quads);
+      }
+    });
+  });
+}
+
+test('1. Turtle Serialization - Empty-property nodes and basic structures', async () => {
+  const doc = {
+    '@context': { ...BIBFRAME_JSONLD_CONTEXT },
+    '@graph': [
+      {
+        '@id': 'https://moonlib.org/item/1001',
+        '@type': 'bf:Item'
+      },
+      {
+        '@id': 'https://moonlib.org/work/2002',
+        '@type': ['bf:Work', 'bflc:TranscribedWork']
+      }
+    ]
+  };
+
+  const ttl = toTurtle(doc);
+  assert.ok(ttl.includes('<https://moonlib.org/item/1001>') && ttl.includes('a bf:Item .'), 'Must serialize empty-property node ending with period');
+
+  // Must parse cleanly in N3 parser
+  const quads = await parseTurtle(ttl);
+  assert.ok(quads.length >= 3, `Expected at least 3 triples, got ${quads.length}`);
+});
+
+test('2. Turtle Serialization - Nested blank nodes with no trailing period inside brackets', async () => {
+  const doc = {
+    '@context': { ...BIBFRAME_JSONLD_CONTEXT },
+    '@graph': [
+      {
+        '@id': 'https://moonlib.org/work/3003',
+        '@type': 'bf:Work',
+        'bf:title': [
+          {
+            '@type': 'bf:Title',
+            'bf:mainTitle': [{ '@value': 'The Shining Moon' }],
+            'bf:subtitle': [{ '@value': 'A Historical Survey' }]
+          }
+        ],
+        'bf:contribution': [
+          {
+            '@type': 'bf:Contribution',
+            'bf:agent': {
+              '@type': 'bf:Person',
+              'rdfs:label': 'Ibn Battuta'
+            },
+            'bf:role': [{ '@id': 'http://id.loc.gov/vocabulary/relators/aut' }]
+          }
+        ]
+      }
+    ]
+  };
+
+  const ttl = toTurtle(doc);
+  assert.ok(ttl.includes('bf:title ['), 'Must use blank node property list syntax');
+  assert.ok(ttl.includes('bf:mainTitle "The Shining Moon"'), 'Must serialize main title');
+  assert.ok(ttl.includes('rdfs:label "Ibn Battuta"'), 'Must serialize nested agent label');
+
+  // N3 parse check
+  const quads = await parseTurtle(ttl);
+  assert.ok(quads.length > 0, 'Quads must be extracted');
+});
+
+test('3. Turtle Serialization - Blank nodes without @type must not serialize as JSON string', async () => {
+  const doc = {
+    '@context': { ...BIBFRAME_JSONLD_CONTEXT },
+    '@graph': [
+      {
+        '@id': 'https://moonlib.org/work/4004',
+        '@type': 'bf:Work',
+        'bf:note': {
+          'rdfs:label': 'A manuscript note'
+        }
+      }
+    ]
+  };
+
+  const ttl = toTurtle(doc);
+  assert.ok(!ttl.includes('"{'), 'Must NOT stringify objects into JSON strings');
+  assert.ok(ttl.includes('rdfs:label "A manuscript note"'), 'Must format inner property');
+
+  const quads = await parseTurtle(ttl);
+  assert.ok(quads.length >= 2, 'Must parse blank node note');
+});
+
+test('4. Turtle Serialization - URI references, language literals, and typed literals', async () => {
+  const doc = {
+    '@context': { ...BIBFRAME_JSONLD_CONTEXT },
+    '@graph': [
+      {
+        '@id': 'https://moonlib.org/work/5005',
+        '@type': 'bf:Work',
+        'bf:title': {
+          '@type': 'bf:Title',
+          'bf:mainTitle': { '@value': 'القبسات', '@language': 'ara' }
+        },
+        'bf:originDate': { '@value': '1650', '@type': 'xsd:gYear' },
+        'bf:language': { '@id': 'http://id.loc.gov/vocabulary/languages/ara' },
+        'bf:hasInstance': { '@id': '_:b99' }
+      },
+      {
+        '@id': '_:b99',
+        '@type': 'bf:Instance',
+        'bf:instanceOf': { '@id': 'https://moonlib.org/work/5005' }
+      }
+    ]
+  };
+
+  const ttl = toTurtle(doc);
+  assert.ok(ttl.includes('"القبسات"@ara'), 'Must format language-tagged literal');
+  assert.ok(ttl.includes('"1650"^^xsd:gYear'), 'Must format typed literal');
+  assert.ok(ttl.includes('<http://id.loc.gov/vocabulary/languages/ara>'), 'Must format URI reference');
+  assert.ok(ttl.includes('_:b99'), 'Must format blank node reference without angle brackets');
+  assert.ok(!ttl.includes('<_:b99>'), 'Must NOT wrap blank node ID in angle brackets');
+
+  const quads = await parseTurtle(ttl);
+  assert.ok(quads.length >= 6, 'All quads must parse');
+});
+
+test('5. Turtle Serialization - Empty arrays must be omitted and not create invalid syntax', async () => {
+  const doc = {
+    '@context': { ...BIBFRAME_JSONLD_CONTEXT },
+    '@graph': [
+      {
+        '@id': 'https://moonlib.org/work/6006',
+        '@type': 'bf:Work',
+        'bf:subject': [],
+        'bf:note': []
+      }
+    ]
+  };
+
+  const ttl = toTurtle(doc);
+  assert.ok(!ttl.includes('bf:subject ()'), 'Empty array must not be output as empty collection');
+  const quads = await parseTurtle(ttl);
+  assert.strictEqual(quads.length, 1, 'Only rdf:type quad should exist');
+});
+
+test('6. RDF/XML Serialization - Preserves actual namespaces and local names', () => {
+  const doc = {
+    '@context': { ...BIBFRAME_JSONLD_CONTEXT },
+    '@graph': [
+      {
+        '@id': 'https://moonlib.org/work/7007',
+        '@type': 'bf:Work',
+        'http://purl.org/dc/terms/title': 'Dublin Core Title',
+        'http://www.w3.org/2000/01/rdf-schema#label': 'RDFS Label',
+        'http://id.loc.gov/vocabulary/relators/aut': { '@id': 'http://id.loc.gov/authorities/names/n85043844' },
+        'http://www.loc.gov/mads/rdf/v1#authoritativeLabel': { '@value': 'Islamic Philosophy', '@language': 'en' },
+        'bf:title': {
+          '@type': 'bf:Title',
+          'bf:mainTitle': { '@value': 'Main Title' }
+        }
+      }
+    ]
+  };
+
+  const xml = toRdfXml(doc);
+  assert.ok(xml.includes('xmlns:dcterms="http://purl.org/dc/terms/"'), 'Must declare dcterms namespace');
+  assert.ok(xml.includes('xmlns:relators="http://id.loc.gov/vocabulary/relators/"'), 'Must declare relators namespace');
+  assert.ok(xml.includes('xmlns:madsrdf="http://www.loc.gov/mads/rdf/v1#"'), 'Must declare madsrdf namespace');
+
+  assert.ok(xml.includes('<dcterms:title>Dublin Core Title</dcterms:title>'), 'Must preserve dcterms:title tag and not rename to bf:');
+  assert.ok(xml.includes('<rdfs:label>RDFS Label</rdfs:label>'), 'Must preserve rdfs:label and not rename to bf:');
+  assert.ok(xml.includes('<madsrdf:authoritativeLabel xml:lang="en">Islamic Philosophy</madsrdf:authoritativeLabel>'), 'Must preserve madsrdf tag and lang attr');
+  assert.ok(xml.includes('<relators:aut rdf:resource="http://id.loc.gov/authorities/names/n85043844"/>'), 'Must preserve relators:aut reference');
+});
+
+test('7. RDF/XML Serialization - Correct blank node references and typed literals', () => {
+  const doc = {
+    '@context': { ...BIBFRAME_JSONLD_CONTEXT },
+    '@graph': [
+      {
+        '@id': 'https://moonlib.org/work/8008',
+        '@type': 'bf:Work',
+        'bf:hasInstance': { '@id': '_:b42' },
+        'bf:originDate': { '@value': '2024', '@type': 'xsd:gYear' }
+      },
+      {
+        '@id': '_:b42',
+        '@type': 'bf:Instance'
+      }
+    ]
+  };
+
+  const xml = toRdfXml(doc);
+  assert.ok(xml.includes('rdf:nodeID="b42"'), 'Blank node reference must use rdf:nodeID, not rdf:resource');
+  assert.ok(!xml.includes('rdf:resource="_:b42"'), 'Must never emit rdf:resource="_:b42"');
+  assert.ok(xml.includes('rdf:datatype="http://www.w3.org/2001/XMLSchema#gYear"'), 'RDF/XML datatype must be full URI, not xsd:gYear');
+});
+
+test('8. W3C JSON-LD Builder - Preserves WEMI Work/Instance/Item links and Expression', () => {
+  const uriSet = {
+    work: 'https://moonlib.org/work/w1',
+    instance: 'https://moonlib.org/instance/i1',
+    item: 'https://moonlib.org/item/it1',
+    expression: 'https://moonlib.org/expression/e1',
+    admin: 'https://moonlib.org/admin/a1'
+  };
+
+  const inputWithoutExpr = {
+    workData: { title: 'Test Work' },
+    instanceData: { title: 'Test Instance' },
+    itemData: { shelfMark: 'B753.D363' },
+    uriSet,
+    enableExpression: false
+  };
+
+  const doc1 = buildW3CJsonLd(inputWithoutExpr);
+  const work1 = doc1['@graph'].find(n => n['@id'] === uriSet.work);
+  const inst1 = doc1['@graph'].find(n => n['@id'] === uriSet.instance);
+  const item1 = doc1['@graph'].find(n => n['@id'] === uriSet.item);
+
+  assert.ok(work1, 'Work node must exist');
+  assert.ok(inst1, 'Instance node must exist');
+  assert.ok(item1, 'Item node must exist');
+
+  assert.deepEqual(work1['bf:hasInstance'], [{ '@id': uriSet.instance }], 'Work must link to Instance');
+  assert.deepEqual(inst1['bf:instanceOf'], { '@id': uriSet.work }, 'Instance must link to Work');
+  assert.deepEqual(inst1['bf:hasItem'], [{ '@id': uriSet.item }], 'Instance must link to Item');
+  assert.deepEqual(item1['bf:itemOf'], { '@id': uriSet.instance }, 'Item must link to Instance');
+
+  // With Expression
+  const inputWithExpr = {
+    ...inputWithoutExpr,
+    expressionData: { language: 'ara' },
+    enableExpression: true
+  };
+  const doc2 = buildW3CJsonLd(inputWithExpr);
+  const work2 = doc2['@graph'].find(n => n['@id'] === uriSet.work);
+  const expr2 = doc2['@graph'].find(n => n['@id'] === uriSet.expression);
+  const inst2 = doc2['@graph'].find(n => n['@id'] === uriSet.instance);
+
+  assert.ok(expr2, 'Expression node must exist when enabled');
+  assert.deepEqual(work2['bf:hasExpression'], [{ '@id': uriSet.expression }], 'Work must link to Expression');
+  assert.deepEqual(expr2['bf:expressionOf'], { '@id': uriSet.work }, 'Expression must link to Work');
+  assert.deepEqual(inst2['bf:instanceOf'], { '@id': uriSet.expression }, 'Instance must link to Expression');
+});
+
+test('9. Validation - Structural vs Semantic error separation', () => {
+  // A document with missing @context (Structural error)
+  const invalidStructure = {
+    '@graph': [{ '@id': 'https://moonlib.org/work/1', '@type': 'bf:Work' }]
+  };
+  const val1 = validateW3CJsonLd(invalidStructure);
+  assert.strictEqual(val1.valid, false, 'Invalid structure must not be valid');
+  assert.strictEqual(val1.structural.valid, false, 'Structural check must fail');
+  assert.ok(val1.structural.errors.some(e => e.includes('@context')), 'Must report missing @context');
+
+  // A document that is structurally valid (valid IDs, valid context) but fails BIBFRAME semantic rules (missing Work/Instance/title)
+  const structurallyValidOnly = {
+    '@context': { ...BIBFRAME_JSONLD_CONTEXT },
+    '@graph': [
+      {
+        '@id': 'https://moonlib.org/someEntity/1',
+        '@type': 'rdfs:Resource',
+        'rdfs:label': 'A generic resource'
+      }
+    ]
+  };
+  const val2 = validateW3CJsonLd(structurallyValidOnly);
+  assert.strictEqual(val2.structural.valid, true, 'Structure itself is valid JSON-LD');
+  assert.strictEqual(val2.semantic.valid, false, 'Semantic check must fail because bf:Work and bf:Instance are missing');
+  assert.strictEqual(val2.valid, false, 'Overall valid must be false: not labeled valid BIBFRAME');
+  assert.ok(val2.semantic.errors.some(e => e.includes('bf:Work')), 'Must report missing bf:Work');
+});
+
+test('10. Moon Wolf Representative Record - Al-Qabasat full cycle verification', async () => {
+  const exampleRecord = realLocExamples[0].data;
+  assert.ok(exampleRecord, 'Al-Qabasat example record must exist in realLocExamples');
+
+  const uriSet = {
+    work: 'http://id.loc.gov/resources/works/b125923',
+    instance: 'http://id.loc.gov/resources/instances/b125923-inst',
+    item: 'http://id.loc.gov/resources/items/b125923-item',
+    expression: 'http://id.loc.gov/resources/expressions/b125923-expr',
+    admin: 'http://id.loc.gov/resources/admin/b125923-admin'
+  };
+
+  const w3cDoc = buildW3CJsonLd({
+    workData: exampleRecord.work,
+    instanceData: exampleRecord.instance,
+    itemData: exampleRecord.item || { shelfMark: 'B753.D363 Q23 1650' },
+    adminData: exampleRecord.admin || {},
+    uriSet,
+    enableExpression: false
+  });
+
+  // 1. Validation check
+  const val = validateW3CJsonLd(w3cDoc);
+  assert.strictEqual(val.structural.valid, true, 'Representative record must be structurally valid');
+  assert.strictEqual(val.semantic.valid, true, `Representative record must be semantically valid BIBFRAME: ${val.semantic.errors.join(', ')}`);
+  assert.strictEqual(val.valid, true, 'Overall validation must be true');
+
+  // 2. Turtle serialization and N3 parse check
+  const ttl = jsonLdToTurtle(w3cDoc);
+  assert.ok(ttl.length > 500, 'Turtle output must have substantial content');
+  const quads = await parseTurtle(ttl);
+  assert.ok(quads.length >= 10, `Representative record must yield at least 10 quads, got ${quads.length}`);
+
+  // 3. RDF/XML serialization check
+  const xml = toRdfXml(w3cDoc);
+  assert.ok(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>'), 'Must have XML declaration');
+  assert.ok(xml.includes('<rdf:RDF'), 'Must have rdf:RDF root');
+  assert.ok(xml.includes('<bf:Work rdf:about="http://id.loc.gov/resources/works/b125923">'), 'Must contain bf:Work node');
+  assert.ok(xml.includes('<bf:Instance rdf:about="http://id.loc.gov/resources/instances/b125923-inst">'), 'Must contain bf:Instance node');
+  assert.ok(xml.includes('القبسات'), 'Must contain Arabic title text');
+
+  // 4. N-Triples serialization check
+  const nt = jsonLdToNTriples(w3cDoc);
+  assert.ok(nt.length > 500, 'N-Triples must be non-empty');
+  assert.ok(!nt.includes('<_:'), 'N-Triples must not contain <_:>');
+});
+
+test('11. FOLIO Integration - Local stack presets for D:\\folio', () => {
+  assert.strictEqual(FOLIO_PRESETS.local.okapiUrl, 'http://localhost:9130', 'Okapi default port must be 9130');
+  assert.strictEqual(FOLIO_PRESETS.local.tenant, 'diku', 'Default tenant must be diku');
+  assert.strictEqual(FOLIO_PRESETS.local.uiUrl, 'http://localhost:3000', 'Local Stripes UI must be port 3000');
+
+  const client = new FOLIOApiClient(FOLIO_PRESETS.local);
+  assert.strictEqual(client.getConfig().okapiUrl, 'http://localhost:9130');
+  assert.strictEqual(client.getConfig().tenant, 'diku');
+});
+
+test('12. FOLIO Integration - Bi-directional BIBFRAME to FOLIO Instance conversion', () => {
+  const exampleRecord = realLocExamples[0].data;
+  const uriSet = {
+    work: 'http://id.loc.gov/resources/works/b125923',
+    instance: 'http://id.loc.gov/resources/instances/b125923-inst',
+    item: 'http://id.loc.gov/resources/items/b125923-item'
+  };
+
+  const w3cDoc = buildW3CJsonLd({
+    workData: exampleRecord.work,
+    instanceData: exampleRecord.instance,
+    itemData: exampleRecord.item || {},
+    adminData: exampleRecord.admin || {},
+    uriSet,
+    enableExpression: false
+  });
+
+  const client = new FOLIOApiClient(FOLIO_PRESETS.local);
+
+  // A. From W3C JSON-LD doc
+  const folioFromW3C = client.bibframeToFOLIOInstance(w3cDoc);
+  assert.strictEqual(folioFromW3C.source, 'BIBFRAME', 'Source must be BIBFRAME');
+  assert.ok(folioFromW3C.title && folioFromW3C.title.includes('القبسات'), 'Title must contain Arabic mainTitle');
+  assert.ok(Array.isArray(folioFromW3C.contributors) && folioFromW3C.contributors.length > 0, 'Contributors must be populated');
+  assert.ok(folioFromW3C.contributors.some(c => c.name.includes('الداماد') || c.name.includes('محمد باقر')), 'Must include author');
+  assert.ok(folioFromW3C.instanceTypeId, 'Instance type ID must be present for mod-inventory');
+
+  // B. From WolfMoon raw editor state
+  const folioFromEditor = client.bibframeToFOLIOInstance({
+    workData: exampleRecord.work,
+    instanceData: exampleRecord.instance,
+  });
+  assert.strictEqual(folioFromEditor.source, 'BIBFRAME');
+  assert.ok(folioFromEditor.title && folioFromEditor.title.includes('القبسات'));
+  assert.ok(folioFromEditor.contributors && folioFromEditor.contributors.length > 0);
+});
+
+test('13. VuFind Integration - Local stack presets for D:\\vufind', () => {
+  assert.strictEqual(VUFIND_PRESETS.local.baseUrl, 'http://localhost:8080', 'VuFind portal port must be 8080');
+  assert.strictEqual(VUFIND_PRESETS.local.solrUrl, 'http://localhost:8983/solr/biblio', 'Solr default core must be biblio on 8983');
+
+  const client = new VuFindApiClient(VUFIND_PRESETS.local);
+  assert.strictEqual(client.getConfig().baseUrl, 'http://localhost:8080');
+  assert.strictEqual(client.getConfig().solrUrl, 'http://localhost:8983/solr/biblio');
+});
+
+test('14. VuFind Integration - BIBFRAME to VuFind Solr doc mapping and two-way conversion', () => {
+  const exampleRecord = realLocExamples[0].data;
+  const uriSet = {
+    work: 'http://id.loc.gov/resources/works/b125923',
+    instance: 'http://id.loc.gov/resources/instances/b125923-inst',
+    item: 'http://id.loc.gov/resources/items/b125923-item'
+  };
+
+  const w3cDoc = buildW3CJsonLd({
+    workData: exampleRecord.work,
+    instanceData: exampleRecord.instance,
+    itemData: exampleRecord.item || {},
+    adminData: exampleRecord.admin || {},
+    uriSet,
+    enableExpression: false
+  });
+
+  const client = new VuFindApiClient(VUFIND_PRESETS.local);
+
+  // A. From W3C JSON-LD doc to Solr doc
+  const solrDoc = client.bibframeToVuFindSolr(w3cDoc);
+  assert.strictEqual(solrDoc.record_format, 'bibframe', 'Record format must be bibframe');
+  assert.ok(solrDoc.title && solrDoc.title.includes('القبسات'), 'Title must contain Arabic text');
+  assert.ok(solrDoc.author && (solrDoc.author.includes('الداماد') || solrDoc.author.includes('محمد باقر')), 'Author must be extracted');
+  assert.ok(Array.isArray(solrDoc.format) && solrDoc.format.includes('Book'), 'Format must include Book');
+  assert.ok(solrDoc.fulltext && solrDoc.fulltext.includes('القبسات'), 'Fulltext must include title words');
+
+  // B. From raw editor state to Solr doc
+  const solrFromEditor = client.bibframeToVuFindSolr({
+    workData: exampleRecord.work,
+    instanceData: exampleRecord.instance,
+  });
+  assert.ok(solrFromEditor.title.includes('القبسات'));
+  assert.ok(solrFromEditor.author.includes('محمد باقر'));
+
+  // C. Two-way conversion: VuFind search record back to Moon BIBFRAME
+  const mockVuFindRecord = {
+    id: 'vf-12345',
+    title: 'تاريخ الفلسفة الإسلامية',
+    titleFull: 'تاريخ الفلسفة الإسلامية في العصر الحديث',
+    authors: ['هنري كوربان'],
+    publishers: ['دار النهار'],
+    publicationDates: ['1983'],
+    places: ['بيروت'],
+    isbns: ['978-2-07-032212-1'],
+    languages: ['ara'],
+    formats: ['Book']
+  };
+
+  const importedBF = client.vufindRecordToBibframe(mockVuFindRecord);
+  assert.strictEqual(importedBF.work.title, 'تاريخ الفلسفة الإسلامية');
+  assert.strictEqual(importedBF.work.author, 'هنري كوربان');
+  assert.strictEqual(importedBF.instance.publisher, 'دار النهار');
+  assert.strictEqual(importedBF.instance.isbn, '978-2-07-032212-1');
+  assert.strictEqual(importedBF.admin.vufindId, 'vf-12345');
+});
+
+test('15. FOLIO Live Cataloging - Auto-Sync payload mapping & roundtrip preservation', () => {
+  const folioClient = new FOLIOApiClient(FOLIO_PRESETS.local);
+
+  const initialFolioInstance = {
+    id: 'fol-889900',
+    title: 'الإشارات والتنبيهات مع الشرح',
+    contributors: [{ name: 'ابن سينا' }, { name: 'نصير الدين الطوسي' }],
+    publication: [{ publisher: 'مؤسسة مطبوعات ديني', dateOfPublication: '1996', place: 'قم' }],
+    identifiers: [{ value: '964-6012-00-1', identifierTypeId: '8261054f-be78-422d-bd51-4ed9f33c3422' }],
+    subjects: [{ value: 'الفلسفة الإسلامية' }, { value: 'المنطق' }],
+    instanceTypeId: '6312d172-f0cf-40f6-b27d-9fa8feaf332f',
+    source: 'FOLIO',
+  };
+
+  // 1. Convert FOLIO instance into Moon BIBFRAME
+  const bfRecord = folioClient.folioInstanceToBIBFRAME(initialFolioInstance);
+  assert.strictEqual(bfRecord.title, 'الإشارات والتنبيهات مع الشرح');
+  assert.strictEqual(bfRecord.workData.author, 'ابن سينا');
+  assert.strictEqual(bfRecord.instanceData.isbn, '964-6012-00-1');
+  assert.strictEqual(bfRecord.metadata.folioInstanceId, 'fol-889900');
+
+  // 2. Cataloger modifies the record in Moon Wolf (enriching subjects and publisher)
+  const newTitle = 'الإشارات والتنبيهات مع شرح نصير الدين الطوسي';
+  bfRecord.workData.title = newTitle;
+  bfRecord.workData['bf:title'] = newTitle;
+  bfRecord.instanceData.title = newTitle;
+  bfRecord.instanceData['bf:title'] = newTitle;
+  bfRecord.instanceData.publisher = 'مؤسسة النشر الإسلامي';
+
+  // 3. Auto-sync back to FOLIO instance payload
+  const syncedFolioPayload = folioClient.bibframeToFOLIOInstance(bfRecord);
+  assert.strictEqual(syncedFolioPayload.title, newTitle);
+  assert.strictEqual(syncedFolioPayload.source, 'BIBFRAME');
+  assert.ok(syncedFolioPayload.contributors && syncedFolioPayload.contributors.length > 0);
+  assert.strictEqual(syncedFolioPayload.contributors[0].name, 'ابن سينا');
+  assert.strictEqual(syncedFolioPayload.publication?.[0]?.publisher, 'مؤسسة النشر الإسلامي');
+  assert.strictEqual(syncedFolioPayload.identifiers?.[0]?.value, '964-6012-00-1');
+});

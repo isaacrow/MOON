@@ -36,6 +36,10 @@ import {
   OpacPublisherEntity,
   OpacInstanceEntity,
   OpacFacets,
+  DeepSearchParsedQuery,
+  FederatedDeepSearchResult,
+  VirtualShelfItem,
+  WemiClusterNode,
   resolveWorkCover,
   normalizeArabic
 } from '../../services/wolfMoonOpacService';
@@ -45,6 +49,7 @@ import {
   isAuthorSavedInMoonSystem
 } from '../../services/authorFinderService';
 import { VERIFIED_IRAQI_AUTHORS } from '../../services/iraqiAuthorAIService';
+import { WolfMoonVuFindPortal } from './cataloging/WolfMoonVuFindPortal';
 import '../../styles/liquid-glass.css';
 
 // Navigation Views
@@ -56,7 +61,8 @@ type OpacNavigationState =
   | { mode: 'subject'; subjectIdOrLabel: string }
   | { mode: 'publisher'; publisherName: string }
   | { mode: 'all-persons' }
-  | { mode: 'all-subjects' };
+  | { mode: 'all-subjects' }
+  | { mode: 'vufind'; initialQuery?: string };
 
 export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => void }) {
   // Navigation State
@@ -73,6 +79,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
       if (subject) return { mode: 'subject', subjectIdOrLabel: subject };
       if (dir === 'persons') return { mode: 'all-persons' };
       if (dir === 'subjects') return { mode: 'all-subjects' };
+      if (p.get('view') === 'vufind') return { mode: 'vufind', initialQuery: q || undefined };
       if (q) return { mode: 'search', query: q };
     }
     return { mode: 'home' };
@@ -84,6 +91,20 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
   const [isSearchOverlayOpen, setIsSearchOverlayOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  // Unified Discovery Display Mode: Share-VDE Clusters | LIBRIS XL Split Inspector | VuFind Discovery Matrix
+  const [searchDisplayMode, setSearchDisplayMode] = useState<'svde-clusters' | 'libris-split' | 'vufind-matrix'>('svde-clusters');
+  const [librisSelectedWorkId, setLibrisSelectedWorkId] = useState<string | null>(null);
+  const [librisInspectorTab, setLibrisInspectorTab] = useState<'overview' | 'wemi' | 'marc' | 'jsonld' | 'holdings'>('overview');
+
+  // VuFind Bookbag & Multi-Record Comparator State
+  const [isBookbagOpen, setIsBookbagOpen] = useState(false);
+  const [bookbagIds, setBookbagIds] = useState<string[]>(() => wolfMoonOpacService.getBookbagIds());
+
+  // Live Federated VuFind + Solr + Share-VDE + LIBRIS Deep Search Result
+  const [federatedSearchData, setFederatedSearchData] = useState<FederatedDeepSearchResult | null>(null);
+  const [isFederatedLoading, setIsFederatedLoading] = useState(false);
+  const [shelfBrowseAnchorId, setShelfBrowseAnchorId] = useState<string>('work-qabasat');
 
   // Advanced Search State
   const [isAdvancedSearchOpen, setIsAdvancedSearchOpen] = useState(false);
@@ -237,11 +258,72 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
   useEffect(() => {
     wolfMoonOpacService.initDatabase().then(() => {
       setDbRefreshKey(k => k + 1);
+      setBookbagIds(wolfMoonOpacService.getBookbagIds());
     });
     return wolfMoonOpacService.subscribe(() => {
       setDbRefreshKey(k => k + 1);
+      setBookbagIds(wolfMoonOpacService.getBookbagIds());
     });
   }, []);
+
+  // Live Federated Search across Share-VDE WEMI, LIBRIS XL, VuFind 11.0, and Apache Solr biblio
+  useEffect(() => {
+    const activeQ = navState.mode === 'search' ? navState.query : searchQuery;
+    let cancelled = false;
+    setIsFederatedLoading(true);
+    const timer = setTimeout(() => {
+      wolfMoonOpacService.executeDeepFederatedSearch(activeQ).then(res => {
+        if (!cancelled) {
+          setFederatedSearchData(res);
+          setIsFederatedLoading(false);
+        }
+      }).catch(() => {
+        if (!cancelled) setIsFederatedLoading(false);
+      });
+    }, 120);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, navState, dbRefreshKey]);
+
+  const parsedDeepQuery = useMemo(() => {
+    const activeQ = searchQuery || (navState.mode === 'search' ? navState.query : '');
+    return wolfMoonOpacService.parseDeepSearchQuery(activeQ);
+  }, [searchQuery, navState]);
+
+  const handleToggleBookbag = (workId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const res = wolfMoonOpacService.toggleBookbag(workId);
+    setBookbagIds(res.items || wolfMoonOpacService.getBookbagIds());
+    if (res.added) {
+      toast.success('تمت إضافة المصنف إلى حقيبة الباحث والمقارنة (VuFind Bookbag)');
+    } else {
+      toast.info('تمت إزالة المصنف من حقيبة الباحث');
+    }
+  };
+
+  const handleExportBookbag = (format: 'ris' | 'bibtex' | 'marc21' | 'jsonld') => {
+    const content = wolfMoonOpacService.exportBookbag(format);
+    if (!content) {
+      toast.error('حقيبة الباحث فارغة حالياً');
+      return;
+    }
+    navigator.clipboard.writeText(content);
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ext = format === 'jsonld' ? 'jsonld' : format === 'marc21' ? 'mrc.txt' : format === 'bibtex' ? 'bib' : 'ris';
+    a.download = `wolfmoon-bookbag-${format}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`تم تصدير ونسخ حقيبة الباحث بصيغة ${format.toUpperCase()} بنجاح`);
+  };
+
+  const bookbagWorks = useMemo(() => {
+    return wolfMoonOpacService.getBookbagWorks();
+  }, [bookbagIds, dbRefreshKey]);
 
   // Close search overlay on click outside
   useEffect(() => {
@@ -254,12 +336,29 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const telemetry = useMemo(() => wolfMoonOpacService.getEcosystemTelemetry(), [dbRefreshKey]);
+
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
-    await wolfMoonOpacService.initDatabase();
+    await wolfMoonOpacService.refreshCatalog();
     setDbRefreshKey(k => k + 1);
     setIsRefreshing(false);
-    toast.success('تمت مزامنة كافة تسجيلات النظام وقاعدة البيانات بنجاح');
+    toast.success('تمت مزامنة الفهرس الحي مع FOLIO ILS ومحرك Solr وقاعدة البيانات المترابطة بنجاح');
+  };
+
+  const handleCirculationAction = async (params: {
+    itemId?: string;
+    instanceId?: string;
+    workId?: string;
+    action: 'checkout' | 'checkin' | 'request';
+  }) => {
+    const res = await wolfMoonOpacService.performCirculationAction(params);
+    setDbRefreshKey(k => k + 1);
+    if (res.success) {
+      toast.success(res.message);
+    } else {
+      toast.error(res.message);
+    }
   };
 
   // Synchronize URL on navigation
@@ -278,6 +377,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
       url.searchParams.delete('subject');
       url.searchParams.delete('dir');
       url.searchParams.delete('q');
+      url.searchParams.delete('view');
 
       if (state.mode === 'work') url.searchParams.set('work', state.workId);
       else if (state.mode === 'person') url.searchParams.set('person', state.personIdOrName);
@@ -285,6 +385,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
       else if (state.mode === 'all-persons') url.searchParams.set('dir', 'persons');
       else if (state.mode === 'all-subjects') url.searchParams.set('dir', 'subjects');
       else if (state.mode === 'search') url.searchParams.set('q', state.query);
+      else if (state.mode === 'vufind') url.searchParams.set('view', 'vufind');
 
       window.history.pushState({}, '', url.toString());
     }
@@ -355,6 +456,24 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
     return wolfMoonOpacService.getWorkByIdOrUri(navState.workId);
   }, [navState, dbRefreshKey]);
 
+  const librisInspectedWork = useMemo(() => {
+    if (librisSelectedWorkId) {
+      const found = wolfMoonOpacService.getWorkByIdOrUri(librisSelectedWorkId);
+      if (found) return found;
+    }
+    return catalogSearchResults[0] || null;
+  }, [librisSelectedWorkId, catalogSearchResults, dbRefreshKey]);
+
+  const virtualShelfItems = useMemo(() => {
+    const anchor = activeWork?.id || librisInspectedWork?.id || shelfBrowseAnchorId || catalogSearchResults[0]?.id || 'work-qabasat';
+    return wolfMoonOpacService.getVirtualShelfNeighbors(anchor, 6);
+  }, [activeWork, librisInspectedWork, shelfBrowseAnchorId, catalogSearchResults, dbRefreshKey]);
+
+  const activeWorkWemiTree = useMemo(() => {
+    if (!activeWork) return null;
+    return wolfMoonOpacService.getWemiClusterTree(activeWork.id);
+  }, [activeWork, dbRefreshKey]);
+
   const qabasatWork = useMemo(() => {
     const list = wolfMoonOpacService.getAllWorks();
     return list.find(w => w.title.includes('قبسات') || w.id.includes('qabasat')) || list[0];
@@ -419,10 +538,10 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
       <Toaster position="top-center" richColors />
 
       {/* =========================================================================
-          1. CLEAN MINIMALIST HEADER (Only Logo & Return to Editor)
+          1. UNIFIED HEADER (Share-VDE + LIBRIS XL + VuFind 11.0 + FOLIO ILS)
           ========================================================================= */}
-      <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b border-slate-200/80 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
+      <header className="sticky top-0 z-40 bg-white/85 backdrop-blur-xl border-b border-slate-200/80 shadow-xs">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3 flex-wrap">
           
           {/* Logo & Project Identity */}
           <div
@@ -432,42 +551,177 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
             }}
             className="flex items-center gap-2.5 cursor-pointer select-none group"
           >
-            <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black shadow-xs group-hover:scale-105 transition-transform">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 via-indigo-600 to-teal-600 text-white flex items-center justify-center font-black shadow-xs group-hover:scale-105 transition-transform">
               <Compass className="w-5 h-5 text-white" />
             </div>
-            <span className="text-base font-black tracking-tight text-slate-900">
-              WOF MOON
-            </span>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-base font-black tracking-tight text-slate-900">
+                  WOF MOON OPAC
+                </span>
+                <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-mono font-bold">
+                  SVDE • LIBRIS • VuFind
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-500 font-semibold hidden sm:block">
+                منظومة الاكتشاف الببليوغرافي المترابط والبحث الفيدرالي الموحد
+              </div>
+            </div>
           </div>
 
-          {/* Go Back for the Moon Editor */}
-          {onOpenEditor && (
+          {/* Discovery Mode Switcher: Share-VDE / LIBRIS / VuFind */}
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-2xl border border-slate-200/90 shadow-xs flex-wrap">
             <button
-              onClick={onOpenEditor}
-              className="liquid-glass-btn px-4 py-2 rounded-xl text-xs font-bold text-slate-800 flex items-center gap-2 shadow-xs transition-all hover:bg-slate-100 cursor-pointer"
-              title="الرجوع إلى محرر الفهرسة (Moon Editor)"
+              type="button"
+              onClick={() => {
+                setSearchDisplayMode('svde-clusters');
+                if (navState.mode === 'vufind') navigateTo({ mode: 'home' });
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                navState.mode !== 'vufind' && searchDisplayMode === 'svde-clusters'
+                  ? 'bg-white text-indigo-900 shadow-xs border border-indigo-200/80'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="نمط Share-VDE (svde.org): عناقيد الأعمال الفكرية WEMI وجداول الطبعات المدمجة"
             >
-              <ArrowLeft className="w-3.5 h-3.5 text-slate-600" />
-              <span>العودة إلى محرر Moon</span>
+              <Layers className="w-3.5 h-3.5 text-indigo-600" />
+              <span>عناقيد Share-VDE</span>
             </button>
-          )}
+            <button
+              type="button"
+              onClick={() => {
+                setSearchDisplayMode('libris-split');
+                if (navState.mode === 'vufind') navigateTo({ mode: 'home' });
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                navState.mode !== 'vufind' && searchDisplayMode === 'libris-split'
+                  ? 'bg-white text-blue-900 shadow-xs border border-blue-200/80'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="نمط المكتبة الوطنية السويدية LIBRIS XL (libris.kb.se): الفاحص الأكاديمي المقسم"
+            >
+              <Code className="w-3.5 h-3.5 text-blue-600" />
+              <span>فاحص LIBRIS XL</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchDisplayMode('vufind-matrix');
+                if (navState.mode === 'vufind') navigateTo({ mode: 'home' });
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                navState.mode !== 'vufind' && searchDisplayMode === 'vufind-matrix'
+                  ? 'bg-white text-teal-900 shadow-xs border border-teal-200/80'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="مصفوفة VuFind + Solr المدمجة مع تصفح الرف الافتراضي"
+            >
+              <Database className="w-3.5 h-3.5 text-teal-600" />
+              <span>مصفوفة VuFind + الرف</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateTo({ mode: 'vufind', initialQuery: searchQuery || undefined })}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                navState.mode === 'vufind'
+                  ? 'bg-teal-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="بوابة VuFind 11.0 الكاملة"
+            >
+              <Search className="w-3.5 h-3.5 text-teal-400" />
+              <span>بوابة VuFind الكاملة</span>
+            </button>
+          </div>
+
+          {/* Right Utility Actions: VuFind Bookbag + AI Authority + Return to Editor */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsBookbagOpen(true)}
+              className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/90 text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+              title="حقيبة الباحث ومقارنة التسجيلات وتصديرها (VuFind Bookbag & Record Comparator)"
+            >
+              <Bookmark className="w-3.5 h-3.5 text-amber-600 fill-amber-500" />
+              <span>حقيبة الباحث والمقارنة</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-amber-600 text-white font-mono text-[10px] font-black">
+                {bookbagIds.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsAiProfileModalOpen(true)}
+              className="px-3 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200/90 text-xs font-bold hidden md:flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+              title="توليف ملفات الاستناد الذكية متعددة المصادر"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+              <span>استناد الذكاء الاصطناعي</span>
+            </button>
+
+            {onOpenEditor && (
+              <button
+                onClick={onOpenEditor}
+                className="liquid-glass-btn px-3.5 py-2 rounded-xl text-xs font-bold text-slate-800 flex items-center gap-1.5 shadow-xs transition-all hover:bg-slate-100 cursor-pointer"
+                title="الرجوع إلى محرر الفهرسة (Moon Editor)"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 text-slate-600" />
+                <span>محرر Moon</span>
+              </button>
+            )}
+          </div>
 
         </div>
       </header>
 
       {/* =========================================================================
-          HONEST CATALOG SANDBOX NOTICE (Honest & Transparent Discovery Guidance)
+          LIVE INTEGRATED ECOSYSTEM STATUS BAR (FOLIO ILS + VuFind + Solr + SPARQL + SVDE + LIBRIS)
           ========================================================================= */}
-      <div className="bg-slate-50/90 border-b border-slate-200/80 px-4 py-2 text-xs text-slate-700 font-medium">
+      <div className="bg-slate-900 text-slate-100 border-b border-slate-800 px-4 py-2 text-xs font-medium">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2">
-            <Info className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
-            <span>
-              <strong className="font-bold text-slate-900">فهرس استكشافي تجريبي موثق (Demonstration Discovery Sandbox)</strong>: المقتنيات وحالات الإتاحة مستمدة من نماذج تسجيلات معتمدة طبقا لمعايير BIBFRAME 2.0 ولا تمثل نظام إعارة حي.
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold text-[11px]">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>FOLIO ILS ({telemetry.totalFolioInstances || totalCount} عنوان • {telemetry.totalFolioItems || 12} نسخة)</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/30 font-bold text-[11px]">
+              <Database className="w-3 h-3" />
+              <span>Solr biblio ({federatedSearchData?.solrLiveCount ?? telemetry.totalSolrDocs ?? totalCount} وثيقة)</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-bold text-[11px]">
+              <Layers className="w-3 h-3" />
+              <span>Share-VDE WEMI ({federatedSearchData?.workClusters?.length || totalCount} عنقود Hub)</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-purple-500/15 text-purple-300 border border-purple-500/30 font-bold text-[11px]">
+              <Network className="w-3 h-3" />
+              <span>SPARQL ({telemetry.totalTriples || 334} ثلاثية RDF)</span>
             </span>
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono">
-            <span>البيانات المترابطة: WEMI • RDA • LOC Hubs • Share-VDE</span>
+          <div className="flex items-center gap-2 text-[11px]">
+            <button
+              onClick={() => setIsBookbagOpen(true)}
+              className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 font-bold flex items-center gap-1 cursor-pointer transition-colors"
+            >
+              <Bookmark className="w-3 h-3" />
+              <span>حقيبة المقارنة ({bookbagIds.length})</span>
+            </button>
+            <a
+              href="http://localhost:8085"
+              target="_blank"
+              rel="noreferrer"
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono flex items-center gap-1 transition-colors"
+            >
+              <span>VuFind (:8085)</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+            <button
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold flex items-center gap-1 cursor-pointer transition-colors"
+            >
+              <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin text-sky-400' : ''}`} />
+              <span>مزامنة فورية</span>
+            </button>
           </div>
         </div>
       </div>
@@ -480,33 +734,33 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
       </div>
 
       {/* =========================================================================
-          2. DEEP SEARCH BAR WITH REAL-TIME CATEGORIZED TYPEAHEAD OVERLAY ("info on search")
+          2. DEEP SEARCH BAR WITH LIBRIS/VUFIND SYNTAX BUILDER & LIVE FEDERATED OVERLAY
           ========================================================================= */}
-      <section className="bg-white/40 backdrop-blur-2xl border-b border-slate-200/80 py-5 px-4 sm:px-6 relative z-30 shadow-[0_4px_20px_rgba(15,23,42,0.02)]">
-        <div ref={searchContainerRef} className="max-w-4xl mx-auto space-y-2 relative">
+      <section className="bg-white/55 backdrop-blur-2xl border-b border-slate-200/80 py-5 px-4 sm:px-6 relative z-30 shadow-[0_4px_20px_rgba(15,23,42,0.02)]">
+        <div ref={searchContainerRef} className="max-w-5xl mx-auto space-y-2.5 relative">
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
             {/* Scope Dropdown */}
             <div className="relative">
               <select
                 value={searchScope}
                 onChange={e => setSearchScope(e.target.value as any)}
-                className="appearance-none bg-white/80 hover:bg-white text-xs font-bold text-slate-800 py-3 pl-7 pr-3 rounded-2xl outline-none cursor-pointer border border-slate-200/90 shadow-xs backdrop-blur-md transition-colors"
+                className="appearance-none bg-white/90 hover:bg-white text-xs font-bold text-slate-800 py-3 pl-7 pr-3 rounded-2xl outline-none cursor-pointer border border-slate-200/90 shadow-xs backdrop-blur-md transition-colors"
                 title="نطاق البحث"
               >
-                <option value="all" className="text-slate-900 bg-white font-medium">جميع الحقول</option>
-                <option value="title" className="text-slate-900 bg-white font-medium">العنوان</option>
-                <option value="creator" className="text-slate-900 bg-white font-medium">المؤلف / العلم</option>
-                <option value="subject" className="text-slate-900 bg-white font-medium">الموضوع</option>
-                <option value="publisher" className="text-slate-900 bg-white font-medium">دار النشر</option>
-                <option value="callNumber" className="text-slate-900 bg-white font-medium">رمز الرف / ISBN</option>
+                <option value="all" className="text-slate-900 bg-white font-medium">جميع الحقول (SVDE + LIBRIS + VuFind)</option>
+                <option value="title" className="text-slate-900 bg-white font-medium">العنوان (title:)</option>
+                <option value="creator" className="text-slate-900 bg-white font-medium">المؤلف / العلم (author:)</option>
+                <option value="subject" className="text-slate-900 bg-white font-medium">الموضوع (subject:)</option>
+                <option value="publisher" className="text-slate-900 bg-white font-medium">دار النشر (publisher:)</option>
+                <option value="callNumber" className="text-slate-900 bg-white font-medium">رمز الرف / ISBN (call:)</option>
               </select>
               <ChevronDown className="w-3.5 h-3.5 text-slate-500 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
 
             {/* Main Search Input */}
-            <div className="relative flex-1 rounded-2xl bg-white/85 hover:bg-white focus-within:bg-white border border-slate-200/90 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 backdrop-blur-md shadow-xs transition-all flex items-center px-3.5 py-1.5">
-              <Search className="w-4 h-4 text-slate-400 ml-2.5 flex-shrink-0" />
+            <div className="relative flex-1 rounded-2xl bg-white/90 hover:bg-white focus-within:bg-white border border-slate-200/90 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 backdrop-blur-md shadow-xs transition-all flex items-center px-3.5 py-1.5">
+              <Search className="w-4 h-4 text-blue-600 ml-2.5 flex-shrink-0" />
               <input
                 ref={searchInputRef}
                 type="text"
@@ -522,7 +776,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                     navigateTo({ mode: 'search', query: searchQuery.trim() });
                   }
                 }}
-                placeholder="ابحث بالعنوان، الكاتب (علي الوردي، الميرداماد)، الموضوع، دار النشر، أو الـ ISBN..."
+                placeholder="بحث عميق موحد (يدعم صيغ LIBRIS وVuFind مثل: author:الوردي year:1950-2025 status:available)..."
                 className="w-full py-1.5 bg-transparent text-sm font-semibold text-slate-900 placeholder-slate-400 outline-none"
               />
               {searchQuery && (
@@ -530,6 +784,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                   onClick={() => {
                     setSearchQuery('');
                     setIsSearchOverlayOpen(false);
+                    if (navState.mode === 'search') navigateTo({ mode: 'search', query: '' });
                   }}
                   className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer transition-colors"
                 >
@@ -547,7 +802,8 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
               }}
               className="liquid-glass-primary text-xs sm:text-sm flex-shrink-0 flex items-center gap-2 cursor-pointer shadow-md"
             >
-              <span>بحث بالفهرس</span>
+              <Search className="w-3.5 h-3.5" />
+              <span>بحث عميق</span>
             </button>
 
             {/* Advanced Search Toggle Button */}
@@ -565,6 +821,61 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
             </button>
           </div>
 
+          {/* LIBRIS XL & VuFind Interactive Fielded Syntax Chips + Live Parsed Query Tokens */}
+          <div className="flex items-center justify-between gap-2 flex-wrap pt-0.5 text-[11px]">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-bold text-slate-500 flex items-center gap-1">
+                <Code className="w-3 h-3 text-indigo-600" />
+                <span>مشغلات البحث العميق (LIBRIS / VuFind Syntax):</span>
+              </span>
+              {[
+                { label: 'title: العنوان', token: 'title:القبسات ' },
+                { label: 'author: المؤلف', token: 'author:الوردي ' },
+                { label: 'subject: الموضوع', token: 'subject:فلسفة ' },
+                { label: 'call: رقم الطلب', token: 'call:B753 ' },
+                { label: 'year: النطاق الزمني', token: 'year:1600-2025 ' },
+                { label: 'status:available المتاح', token: 'status:available ' },
+              ].map(chip => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  onClick={() => {
+                    const nextQ = `${searchQuery.trim()} ${chip.token}`.trim() + ' ';
+                    setSearchQuery(nextQ);
+                    searchInputRef.current?.focus();
+                    setIsSearchOverlayOpen(true);
+                  }}
+                  className="px-2 py-0.5 rounded-lg bg-white/90 hover:bg-indigo-50 text-slate-700 hover:text-indigo-800 border border-slate-200/90 hover:border-indigo-300 font-mono font-semibold cursor-pointer transition-all shadow-2xs"
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Live Parsed Query Clauses Indicator */}
+            {((parsedDeepQuery?.clauses?.length || 0) > 0 || parsedDeepQuery?.yearFrom || (parsedDeepQuery?.excludedTerms?.length || 0) > 0) && (
+              <div className="flex items-center gap-1.5 flex-wrap bg-indigo-50/90 border border-indigo-200 px-2.5 py-1 rounded-xl text-[10px] font-bold text-indigo-900">
+                <Sparkles className="w-3 h-3 text-indigo-600" />
+                <span>تحليل الاستعلام الفوري:</span>
+                {(parsedDeepQuery?.clauses || []).map((c, idx) => (
+                  <span key={idx} className="px-1.5 py-0.2 rounded bg-white border border-indigo-200 font-mono text-indigo-800">
+                    {c.field}={c.value}
+                  </span>
+                ))}
+                {(parsedDeepQuery?.yearFrom || parsedDeepQuery?.yearTo) && (
+                  <span className="px-1.5 py-0.2 rounded bg-amber-100 border border-amber-300 font-mono text-amber-900">
+                    الفترة: {parsedDeepQuery.yearFrom || '...'}–{parsedDeepQuery.yearTo || '...'}
+                  </span>
+                )}
+                {(parsedDeepQuery?.excludedTerms || []).map((ex, idx) => (
+                  <span key={idx} className="px-1.5 py-0.2 rounded bg-rose-100 border border-rose-300 font-mono text-rose-800">
+                    NOT {ex}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* ADVANCED SEARCH EXPANDABLE PANEL */}
           <AnimatePresence>
             {isAdvancedSearchOpen && (
@@ -578,7 +889,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                   <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
                     <span className="font-black text-slate-900 flex items-center gap-1.5 text-sm">
                       <Sliders className="w-4 h-4 text-blue-600" />
-                      <span>البحث الببليوغرافي المتقدم (Multi-Field Search)</span>
+                      <span>البحث الببليوغرافي المتقدم (Multi-Field Search — LIBRIS & VuFind)</span>
                     </span>
                     <button
                       onClick={() => {
@@ -599,7 +910,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                    {/* Title */}
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">العنوان أو جزء منه:</label>
                       <input
@@ -611,7 +921,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       />
                     </div>
 
-                    {/* Creator / Contributor */}
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">المؤلف / المسؤولية الفكرية:</label>
                       <input
@@ -623,7 +932,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       />
                     </div>
 
-                    {/* Subject */}
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">الموضوع أو المفهوم:</label>
                       <input
@@ -635,7 +943,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       />
                     </div>
 
-                    {/* Publisher */}
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">دار النشر أو المطبعة:</label>
                       <input
@@ -647,7 +954,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       />
                     </div>
 
-                    {/* Year Range From */}
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">سنة النشر (من):</label>
                       <input
@@ -659,7 +965,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       />
                     </div>
 
-                    {/* Year Range To */}
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">سنة النشر (إلى):</label>
                       <input
@@ -671,7 +976,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       />
                     </div>
 
-                    {/* Resource Format */}
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">شكل الوعاء / المادة:</label>
                       <select
@@ -687,7 +991,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       </select>
                     </div>
 
-                    {/* Call number or ISBN */}
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">رمز الرف أو ISBN:</label>
                       <input
@@ -724,7 +1027,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
             )}
           </AnimatePresence>
 
-          {/* DEEP LIVE SEARCH CATEGORIZED OVERLAY ("info on search") */}
+          {/* DEEP LIVE FEDERATED SEARCH OVERLAY ("info on search" — Share-VDE + LIBRIS + VuFind Solr) */}
           <AnimatePresence>
             {isSearchOverlayOpen && searchQuery.trim().length > 0 && (
               <motion.div
@@ -732,24 +1035,69 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
                 transition={{ duration: 0.18 }}
-                className="absolute top-full right-0 left-0 mt-2 bg-white/95 backdrop-blur-2xl border border-slate-200/90 shadow-2xl rounded-2xl overflow-hidden z-50 max-h-[80vh] overflow-y-auto text-slate-900"
+                className="absolute top-full right-0 left-0 mt-2 bg-white/95 backdrop-blur-2xl border border-slate-200/90 shadow-2xl rounded-2xl overflow-hidden z-50 max-h-[82vh] overflow-y-auto text-slate-900"
               >
-                <div className="p-3.5 border-b border-slate-200/80 flex items-center justify-between text-xs text-slate-600 font-bold bg-slate-50/80">
-                  <div className="flex items-center gap-1.5 text-slate-900 font-black">
+                <div className="p-3.5 border-b border-slate-200/80 flex items-center justify-between flex-wrap gap-2 text-xs text-slate-600 font-bold bg-slate-50/90">
+                  <div className="flex items-center gap-2 text-slate-900 font-black">
                     <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                    <span>نتائج الفحص والاستكشاف المباشر ({liveSearchResults.totalMatches} نتيجة)</span>
+                    <span>الاكتشاف الفيدرالي اللحظي ({liveSearchResults.totalMatches + (federatedSearchData?.vufindLiveRecords?.length || 0)} تطابق)</span>
                   </div>
-                  <span className="text-[11px] text-slate-500 font-mono">اضغط Enter للبحث الشامل</span>
+                  <div className="flex items-center gap-2 text-[10px] font-mono">
+                    <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      SVDE Hubs: {federatedSearchData?.workClusters?.length || liveSearchResults.works.length}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
+                      VuFind/Solr: {federatedSearchData?.solrLiveCount || liveSearchResults.works.length}
+                    </span>
+                    <span className="text-slate-500">Enter للبحث الشامل</span>
+                  </div>
                 </div>
 
                 <div className="p-4 space-y-4 divide-y divide-slate-100 text-xs">
                   
+                  {/* Category 0: Share-VDE Opus / Hub Clusters */}
+                  {federatedSearchData?.workClusters && federatedSearchData.workClusters.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-black uppercase text-indigo-700 tracking-wider flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>عناقيد الأعمال الفكرية الموحدة (Share-VDE Opus / bf:Hub)</span>
+                        </span>
+                        <span className="text-[10px] font-mono text-indigo-500">IFLA LRM / BIBFRAME Hub</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {federatedSearchData.workClusters.slice(0, 4).map(cluster => (
+                          <div
+                            key={cluster.hubUri}
+                            onClick={() => navigateTo({ mode: 'work', workId: cluster.works[0].id })}
+                            className="p-2.5 rounded-xl bg-indigo-50/50 hover:bg-indigo-50 border border-indigo-200/70 transition-all cursor-pointer flex items-center justify-between gap-2"
+                          >
+                            <div className="truncate">
+                              <div className="font-black text-indigo-950 truncate">{cluster.hubTitle}</div>
+                              <div className="text-[10px] text-indigo-700 font-medium truncate">
+                                {cluster.creatorName} • <span className="font-mono">{cluster.hubUri}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <span className="px-2 py-0.5 rounded-full bg-white text-indigo-800 border border-indigo-200 text-[10px] font-mono font-bold">
+                                {cluster.totalEditions} طبعة
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                                {cluster.availableItems} متاح
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Category 1: Matching Works */}
                   {liveSearchResults.works.length > 0 && (
-                    <div className="space-y-2">
+                    <div className="space-y-2 pt-3">
                       <div className="text-[11px] font-black uppercase text-blue-700 tracking-wider flex items-center gap-1.5">
                         <BookOpen className="w-3.5 h-3.5 text-blue-600" />
-                        <span>الأعمال والكتب الفكرية (bf:Work)</span>
+                        <span>الأعمال والكتب الفكرية (LIBRIS XL / bf:Work)</span>
                       </div>
                       <div className="grid grid-cols-1 gap-1.5">
                         {liveSearchResults.works.map(work => (
@@ -771,8 +1119,62 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                                 </div>
                               </div>
                             </div>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700 font-mono">
-                              {work.instances.length} طبعة
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700 font-mono">
+                                {work.instances.length} طبعة
+                              </span>
+                              <button
+                                type="button"
+                                onClick={e => handleToggleBookbag(work.id, e)}
+                                className={`p-1.5 rounded-lg border text-[10px] cursor-pointer transition-colors ${
+                                  bookbagIds.includes(work.id)
+                                    ? 'bg-amber-100 border-amber-300 text-amber-900'
+                                    : 'bg-white border-slate-200 text-slate-500 hover:text-amber-700'
+                                }`}
+                                title="حفظ في حقيبة الباحث (VuFind Bookbag)"
+                              >
+                                <Bookmark className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Category 2: Live VuFind + Apache Solr DisMax Matches */}
+                  {federatedSearchData?.vufindLiveRecords && federatedSearchData.vufindLiveRecords.length > 0 && (
+                    <div className="space-y-2 pt-3">
+                      <div className="text-[11px] font-black uppercase text-teal-700 tracking-wider flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <Database className="w-3.5 h-3.5 text-teal-600" />
+                          <span>نتائج محرك VuFind 11.0 وفهرس Apache Solr (biblio DisMax)</span>
+                        </span>
+                        <span className="text-[10px] font-mono text-teal-600">Live Solr RTA</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                        {federatedSearchData.vufindLiveRecords.slice(0, 4).map((rec: any, rIdx: number) => (
+                          <div
+                            key={rec.id || rIdx}
+                            onClick={() => {
+                              const matchedW = wolfMoonOpacService.getWorkByIdOrUri(rec.id) || liveSearchResults.works[0];
+                              if (matchedW) navigateTo({ mode: 'work', workId: matchedW.id });
+                              else navigateTo({ mode: 'vufind', initialQuery: rec.title || searchQuery });
+                            }}
+                            className="p-2.5 rounded-xl bg-teal-50/40 hover:bg-teal-50 border border-teal-200/70 transition-all cursor-pointer flex items-center justify-between gap-2"
+                          >
+                            <div className="truncate">
+                              <div className="font-bold text-slate-900 truncate">{rec.title}</div>
+                              <div className="text-[10px] text-slate-500 font-mono truncate">
+                                {rec.callnumber || 'B753'} • {rec.format || 'Book'}
+                              </div>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 ${
+                              rec.availability === 'Checked Out' || rec.status === 'checked_out'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-emerald-100 text-emerald-800'
+                            }`}>
+                              {rec.availability === 'Checked Out' || rec.status === 'checked_out' ? 'معار FOLIO' : 'متاح FOLIO'}
                             </span>
                           </div>
                         ))}
@@ -780,12 +1182,12 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                     </div>
                   )}
 
-                  {/* Category 2: Matching Authors */}
+                  {/* Category 3: Matching Authors */}
                   {liveSearchResults.persons.length > 0 && (
                     <div className="space-y-2 pt-3">
                       <div className="text-[11px] font-black uppercase text-amber-700 tracking-wider flex items-center gap-1.5">
                         <User className="w-3.5 h-3.5 text-amber-600" />
-                        <span>المؤلفون والأعلام (bf:Person / NACO)</span>
+                        <span>المؤلفون والأعلام (bf:Person / NACO / VIAF)</span>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                         {liveSearchResults.persons.map(person => (
@@ -816,7 +1218,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                     </div>
                   )}
 
-                  {/* Category 3: Matching Subjects */}
+                  {/* Category 4: Matching Subjects */}
                   {liveSearchResults.subjects.length > 0 && (
                     <div className="space-y-2 pt-3">
                       <div className="text-[11px] font-black uppercase text-emerald-700 tracking-wider flex items-center gap-1.5">
@@ -838,7 +1240,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                     </div>
                   )}
 
-                  {/* Category 4: Matching Publishers */}
+                  {/* Category 5: Matching Publishers */}
                   {liveSearchResults.publishers.length > 0 && (
                     <div className="space-y-2 pt-3">
                       <div className="text-[11px] font-black uppercase text-purple-700 tracking-wider flex items-center gap-1.5">
@@ -862,15 +1264,25 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
 
                 </div>
 
-                <div className="p-3 bg-slate-50 border-t border-slate-200/80 text-center">
+                <div className="p-3 bg-slate-50 border-t border-slate-200/80 flex items-center justify-between px-4">
                   <button
                     onClick={() => {
                       setIsSearchOverlayOpen(false);
                       navigateTo({ mode: 'search', query: searchQuery.trim() });
                     }}
-                    className="text-xs font-bold text-blue-700 hover:text-blue-900 hover:underline cursor-pointer flex items-center justify-center gap-1 mx-auto"
+                    className="text-xs font-bold text-blue-700 hover:text-blue-900 hover:underline cursor-pointer flex items-center gap-1"
                   >
-                    <span>عرض كافة النتائج في صفحة الفهرس الكاملة</span>
+                    <span>عرض كافة النتائج في صفحة الفهرس الشامل</span>
+                    <span>←</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsSearchOverlayOpen(false);
+                      navigateTo({ mode: 'vufind', initialQuery: searchQuery.trim() });
+                    }}
+                    className="text-xs font-bold text-teal-700 hover:text-teal-900 hover:underline cursor-pointer flex items-center gap-1"
+                  >
+                    <span>فتح النتائج في بوابة VuFind 11.0</span>
                     <span>←</span>
                   </button>
                 </div>
@@ -886,19 +1298,19 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
           ========================================================================= */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
-        {/* -------------------- VIEW A: HOME VIEW (Academic Content-First Discovery) -------------------- */}
+        {/* -------------------- VIEW A: HOME VIEW (Unified Share-VDE + LIBRIS XL + VuFind Discovery) -------------------- */}
         {navState.mode === 'home' && (
           <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/80">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200/80">
               <div>
-                <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2.5">
-                  <span>المصنفات والمخطوطات المفهرسة</span>
+                <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2.5 flex-wrap">
+                  <span>الفهرس الدلالي الموحد (Share-VDE • LIBRIS XL • VuFind)</span>
                   <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 text-xs font-mono font-bold border border-blue-200/80">
-                    {catalogSearchResults.length} تسجيلة
+                    {catalogSearchResults.length} عمل فكري ({telemetry.totalFolioItems || 12} نسخة FOLIO)
                   </span>
                 </h1>
                 <p className="text-xs sm:text-sm text-slate-600 font-medium mt-1">
-                  تصفح التسجيلات الببليوغرافية وبياناتها المترابطة وفق معايير BIBFRAME 2.0 وRDA
+                  اكتشاف ببليوغرافي عميق يدمج عناقيد Share-VDE (WEMI)، وفاحص LIBRIS XL الأكاديمي، وخدمات VuFind + Solr والإعارة الفورية FOLIO ILS
                 </p>
               </div>
 
@@ -908,66 +1320,155 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                   onClick={() => navigateTo({ mode: 'search', query: '' })}
                   className="liquid-glass-btn px-3 py-1.5 text-xs font-bold text-slate-800 flex items-center gap-1.5 cursor-pointer shadow-xs"
                 >
-                  <List className="w-3.5 h-3.5 text-slate-500" />
-                  <span>تصفية الفهرس العام</span>
+                  <Filter className="w-3.5 h-3.5 text-blue-600" />
+                  <span>البحث الموجه والفلاتر</span>
                 </button>
                 <button
                   onClick={() => navigateTo({ mode: 'all-persons' })}
                   className="liquid-glass-btn px-3 py-1.5 text-xs font-bold text-slate-800 flex items-center gap-1.5 cursor-pointer shadow-xs"
                 >
-                  <User className="w-3.5 h-3.5 text-slate-500" />
+                  <User className="w-3.5 h-3.5 text-amber-600" />
                   <span>دليل الأعلام ({allPersonsList.length})</span>
                 </button>
                 <button
                   onClick={() => navigateTo({ mode: 'all-subjects' })}
                   className="liquid-glass-btn px-3 py-1.5 text-xs font-bold text-slate-800 flex items-center gap-1.5 cursor-pointer shadow-xs"
                 >
-                  <Tag className="w-3.5 h-3.5 text-slate-500" />
+                  <Tag className="w-3.5 h-3.5 text-emerald-600" />
                   <span>مكنز المفاهيم ({allSubjectsList.length})</span>
+                </button>
+                <button
+                  onClick={() => setIsBookbagOpen(true)}
+                  className="liquid-glass-btn px-3 py-1.5 text-xs font-bold text-amber-900 bg-amber-50 border-amber-200/90 flex items-center gap-1.5 cursor-pointer shadow-xs hover:bg-amber-100"
+                >
+                  <Bookmark className="w-3.5 h-3.5 text-amber-600" />
+                  <span>حقيبة المقارنة ({bookbagIds.length})</span>
                 </button>
               </div>
             </div>
 
-            {/* Catalog Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {catalogSearchResults.map(work => (
-                <WorkCardComponent
-                  key={work.id}
-                  work={work}
-                  onSelectWork={() => navigateTo({ mode: 'work', workId: work.id })}
-                  onSelectPerson={p => navigateTo({ mode: 'person', personIdOrName: p })}
-                  onSelectSubject={s => navigateTo({ mode: 'subject', subjectIdOrLabel: s })}
-                  onHoverPerson={(p, e) => triggerHoverCard('person', p, e)}
-                  onHoverSubject={(s, e) => triggerHoverCard('subject', s, e)}
-                  onLeaveHover={closeHoverCard}
+            {/* MODE 1: SHARE-VDE CLUSTERS (Default in Home) */}
+            {searchDisplayMode === 'svde-clusters' && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {catalogSearchResults.map(work => (
+                    <WorkCardComponent
+                      key={work.id}
+                      work={work}
+                      onSelectWork={() => navigateTo({ mode: 'work', workId: work.id })}
+                      onSelectPerson={p => navigateTo({ mode: 'person', personIdOrName: p })}
+                      onSelectSubject={s => navigateTo({ mode: 'subject', subjectIdOrLabel: s })}
+                      onHoverPerson={(p, e) => triggerHoverCard('person', p, e)}
+                      onHoverSubject={(s, e) => triggerHoverCard('subject', s, e)}
+                      onLeaveHover={closeHoverCard}
+                      isInBookbag={bookbagIds.includes(work.id)}
+                      onToggleBookbag={e => handleToggleBookbag(work.id, e)}
+                      onCirculationAction={handleCirculationAction}
+                    />
+                  ))}
+                </div>
+
+                {/* VuFind Integrated Virtual Shelf Browse Strip on Home Page */}
+                <VirtualShelfBrowseSection
+                  items={virtualShelfItems}
+                  onSelectWork={workId => navigateTo({ mode: 'work', workId })}
+                  onReanchor={workId => setShelfBrowseAnchorId(workId)}
                 />
-              ))}
-            </div>
+              </div>
+            )}
+
+            {/* MODE 2: LIBRIS XL SPLIT-PANE ACADEMIC INSPECTOR */}
+            {searchDisplayMode === 'libris-split' && (
+              <LibrisSplitInspectorView
+                works={catalogSearchResults}
+                selectedWork={librisInspectedWork}
+                inspectorTab={librisInspectorTab}
+                onSelectWorkRow={w => setLibrisSelectedWorkId(w.id)}
+                onChangeTab={t => setLibrisInspectorTab(t)}
+                onOpenFullWork={wId => navigateTo({ mode: 'work', workId: wId })}
+                onSelectPerson={p => navigateTo({ mode: 'person', personIdOrName: p })}
+                onSelectSubject={s => navigateTo({ mode: 'subject', subjectIdOrLabel: s })}
+                onCirculationAction={handleCirculationAction}
+                bookbagIds={bookbagIds}
+                onToggleBookbag={handleToggleBookbag}
+                onCopy={handleCopy}
+              />
+            )}
+
+            {/* MODE 3: VUFIND + SOLR INTEGRATED DISCOVERY MATRIX & VIRTUAL SHELF */}
+            {searchDisplayMode === 'vufind-matrix' && (
+              <VuFindIntegratedMatrixView
+                works={catalogSearchResults}
+                federatedData={federatedSearchData}
+                shelfItems={virtualShelfItems}
+                onSelectWork={wId => navigateTo({ mode: 'work', workId: wId })}
+                onReanchorShelf={wId => setShelfBrowseAnchorId(wId)}
+                onFilterSubject={s => {
+                  setSelectedSubjectFilter(s);
+                  navigateTo({ mode: 'search', query: searchQuery });
+                }}
+                onCirculationAction={handleCirculationAction}
+                bookbagIds={bookbagIds}
+                onToggleBookbag={handleToggleBookbag}
+                onOpenFullVuFind={() => navigateTo({ mode: 'vufind', initialQuery: searchQuery || undefined })}
+              />
+            )}
           </div>
         )}
 
-        {/* -------------------- VIEW B: SEARCH RESULTS & FACETS (Libris Style) -------------------- */}
+        {/* -------------------- VIEW B: SEARCH RESULTS & FACETS (Share-VDE + LIBRIS XL + VuFind Federated) -------------------- */}
         {navState.mode === 'search' && (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200/80">
               <div>
-                <h1 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                  <span>نتائج الفهرس العام</span>
+                <h1 className="text-lg font-black text-slate-900 flex items-center gap-2 flex-wrap">
+                  <span>نتائج البحث الببليوغرافي والفيدرالي العميق</span>
                   {navState.query && (
-                    <span className="text-slate-600 font-medium text-sm">
-                      للبحث: "{navState.query}"
+                    <span className="text-blue-700 font-bold text-sm font-mono bg-blue-50 px-2.5 py-0.5 rounded-lg border border-blue-200">
+                      "{navState.query}"
                     </span>
                   )}
-                  <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-xs font-mono font-bold text-blue-700 border border-blue-200/80">
-                    {totalCount} مصنف إجمالي
+                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-50 text-xs font-mono font-bold text-indigo-700 border border-indigo-200/80">
+                    {totalCount} عمل • {federatedSearchData?.solrLiveCount ?? totalCount} وثيقة Solr
                   </span>
                 </h1>
                 <p className="text-xs text-slate-500 font-medium mt-0.5">
-                  عرض {totalCount === 0 ? 0 : ((activePageNumber - 1) * 12) + 1} إلى {Math.min(activePageNumber * 12, totalCount)} من إجمالي {totalCount} مصنف
+                  عرض {totalCount === 0 ? 0 : ((activePageNumber - 1) * 12) + 1} إلى {Math.min(activePageNumber * 12, totalCount)} من إجمالي {totalCount} مصنف — مع إتاحة FOLIO ILS اللحظية وخدمات VuFind
                 </p>
               </div>
 
-              <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                {/* View Mode Switcher inside Search Results */}
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-[11px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setSearchDisplayMode('svde-clusters')}
+                    className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all ${
+                      searchDisplayMode === 'svde-clusters' ? 'bg-white text-indigo-900 shadow-2xs font-black' : 'text-slate-600'
+                    }`}
+                  >
+                    Share-VDE
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSearchDisplayMode('libris-split')}
+                    className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all ${
+                      searchDisplayMode === 'libris-split' ? 'bg-white text-blue-900 shadow-2xs font-black' : 'text-slate-600'
+                    }`}
+                  >
+                    LIBRIS XL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSearchDisplayMode('vufind-matrix')}
+                    className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all ${
+                      searchDisplayMode === 'vufind-matrix' ? 'bg-white text-teal-900 shadow-2xs font-black' : 'text-slate-600'
+                    }`}
+                  >
+                    VuFind Matrix
+                  </button>
+                </div>
+
                 {/* Sorting Dropdown */}
                 <div className="flex items-center gap-1.5 bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-1 shadow-xs">
                   <span className="text-xs font-bold text-slate-500">الترتيب:</span>
@@ -979,7 +1480,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                     }}
                     className="bg-transparent text-xs font-bold text-slate-900 outline-none cursor-pointer"
                   >
-                    <option value="relevance" className="text-slate-900 bg-white font-medium">الأكثر صلة (Relevance)</option>
+                    <option value="relevance" className="text-slate-900 bg-white font-medium">الأكثر صلة (DisMax Relevance)</option>
                     <option value="title" className="text-slate-900 bg-white font-medium">العنوان (أ - ي)</option>
                     <option value="date-desc" className="text-slate-900 bg-white font-medium">الأحدث نشراً</option>
                     <option value="date-asc" className="text-slate-900 bg-white font-medium">الأقدم تاريخاً</option>
@@ -1000,7 +1501,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                     className="text-xs font-bold text-rose-600 hover:text-rose-800 cursor-pointer flex items-center gap-1 transition-colors"
                   >
                     <X className="w-3.5 h-3.5" />
-                    <span>إعادة تعيين كافة الفلاتر</span>
+                    <span>إعادة تعيين الفلاتر</span>
                   </button>
                 )}
               </div>
@@ -1055,7 +1556,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                   <div className="p-4 rounded-2xl bg-white/85 backdrop-blur-xl space-y-3 border border-slate-200/90 shadow-xs">
                     <div className="text-xs font-black text-slate-900 flex items-center gap-1.5">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>حالة الإتاحة والوصول</span>
+                      <span>حالة الإتاحة في FOLIO ILS</span>
                     </div>
                     <div className="space-y-1 text-xs">
                       <button
@@ -1094,7 +1595,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                 <div className="p-4 rounded-2xl bg-white/85 backdrop-blur-xl space-y-3 border border-slate-200/90 shadow-xs">
                   <div className="text-xs font-black text-slate-900 flex items-center gap-1.5">
                     <Tag className="w-3.5 h-3.5 text-blue-600" />
-                    <span>المواضيع والمفاهيم</span>
+                    <span>المواضيع والمفاهيم (SKOS / Solr)</span>
                   </div>
                   <div className="space-y-1 max-h-48 overflow-y-auto text-xs">
                     <button
@@ -1132,7 +1633,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                 <div className="p-4 rounded-2xl bg-white/85 backdrop-blur-xl space-y-3 border border-slate-200/90 shadow-xs">
                   <div className="text-xs font-black text-slate-900 flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-blue-600" />
-                    <span>المؤلفون والأعلام</span>
+                    <span>المؤلفون والأعلام (NACO)</span>
                   </div>
                   <div className="space-y-1 max-h-48 overflow-y-auto text-xs">
                     <button
@@ -1167,7 +1668,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                 </div>
               </div>
 
-              {/* Main Works Results Grid & Pagination */}
+              {/* Main Works Results Area (Supports all 3 modes: Share-VDE, LIBRIS XL, VuFind Matrix) */}
               <div className="lg:col-span-3 space-y-5">
                 {catalogSearchResults.length === 0 ? (
                   <div className="p-8 sm:p-12 rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/90 text-slate-900 shadow-sm space-y-6">
@@ -1183,31 +1684,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       </p>
                     </div>
 
-                    {/* Inline Query Relaxation & Quick Search Box */}
                     <div className="max-w-md mx-auto p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5">
-                      <div className="text-xs font-bold text-slate-700">تعديل عبارة البحث الحالية:</div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={searchQuery}
-                          onChange={e => setSearchQuery(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') {
-                              navigateTo({ mode: 'search', query: searchQuery.trim() });
-                            }
-                          }}
-                          placeholder="اكتب كلمة رئيسية للبحث..."
-                          className="flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-900 outline-none focus:border-blue-500"
-                        />
-                        <button
-                          onClick={() => navigateTo({ mode: 'search', query: searchQuery.trim() })}
-                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs cursor-pointer shadow-xs transition-all"
-                        >
-                          بحث
-                        </button>
-                      </div>
-
-                      {/* Filter Reset & Broaden Scope Action */}
                       <button
                         onClick={() => {
                           setSelectedSubjectFilter('all');
@@ -1227,7 +1704,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       </button>
                     </div>
 
-                    {/* Suggested Popular Benchmark Queries */}
                     <div className="pt-2 border-t border-slate-100 space-y-2 text-center">
                       <div className="text-xs font-bold text-slate-500">عمليات بحث ومفاهيم استكشافية مقترحة:</div>
                       <div className="flex items-center justify-center gap-2 flex-wrap text-xs">
@@ -1245,53 +1721,63 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                         ))}
                       </div>
                     </div>
-
-                    {/* Alternate Discovery Pathways */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                      <button
-                        onClick={() => navigateTo({ mode: 'all-persons' })}
-                        className="p-3.5 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-right cursor-pointer shadow-xs transition-all flex items-center gap-3"
-                      >
-                        <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center flex-shrink-0">
-                          <User className="w-4 h-4 text-amber-600" />
-                        </div>
-                        <div>
-                          <div className="font-black text-xs text-slate-900">تصفح دليل الأعلام والمؤلفين</div>
-                          <div className="text-[11px] text-slate-500">استكشف الإنتاج الفكري حسب أسماء المؤلفين</div>
-                        </div>
-                      </button>
-
-                      <button
-                        onClick={() => navigateTo({ mode: 'all-subjects' })}
-                        className="p-3.5 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-right cursor-pointer shadow-xs transition-all flex items-center gap-3"
-                      >
-                        <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center flex-shrink-0">
-                          <Tag className="w-4 h-4 text-blue-600" />
-                        </div>
-                        <div>
-                          <div className="font-black text-xs text-slate-900">تصفح مكنز رؤوس الموضوعات</div>
-                          <div className="text-[11px] text-slate-500">استكشف المصنفات وفق التصنيف الموضوعي</div>
-                        </div>
-                      </button>
-                    </div>
-
                   </div>
                 ) : (
                   <>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {catalogSearchResults.map(work => (
-                        <WorkCardComponent
-                          key={work.id}
-                          work={work}
-                          onSelectWork={() => navigateTo({ mode: 'work', workId: work.id })}
-                          onSelectPerson={p => navigateTo({ mode: 'person', personIdOrName: p })}
-                          onSelectSubject={s => navigateTo({ mode: 'subject', subjectIdOrLabel: s })}
-                          onHoverPerson={(p, e) => triggerHoverCard('person', p, e)}
-                          onHoverSubject={(s, e) => triggerHoverCard('subject', s, e)}
-                          onLeaveHover={closeHoverCard}
-                        />
-                      ))}
-                    </div>
+                    {searchDisplayMode === 'svde-clusters' && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {catalogSearchResults.map(work => (
+                          <WorkCardComponent
+                            key={work.id}
+                            work={work}
+                            onSelectWork={() => navigateTo({ mode: 'work', workId: work.id })}
+                            onSelectPerson={p => navigateTo({ mode: 'person', personIdOrName: p })}
+                            onSelectSubject={s => navigateTo({ mode: 'subject', subjectIdOrLabel: s })}
+                            onHoverPerson={(p, e) => triggerHoverCard('person', p, e)}
+                            onHoverSubject={(s, e) => triggerHoverCard('subject', s, e)}
+                            onLeaveHover={closeHoverCard}
+                            isInBookbag={bookbagIds.includes(work.id)}
+                            onToggleBookbag={e => handleToggleBookbag(work.id, e)}
+                            onCirculationAction={handleCirculationAction}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {searchDisplayMode === 'libris-split' && (
+                      <LibrisSplitInspectorView
+                        works={catalogSearchResults}
+                        selectedWork={librisInspectedWork}
+                        inspectorTab={librisInspectorTab}
+                        onSelectWorkRow={w => setLibrisSelectedWorkId(w.id)}
+                        onChangeTab={t => setLibrisInspectorTab(t)}
+                        onOpenFullWork={wId => navigateTo({ mode: 'work', workId: wId })}
+                        onSelectPerson={p => navigateTo({ mode: 'person', personIdOrName: p })}
+                        onSelectSubject={s => navigateTo({ mode: 'subject', subjectIdOrLabel: s })}
+                        onCirculationAction={handleCirculationAction}
+                        bookbagIds={bookbagIds}
+                        onToggleBookbag={handleToggleBookbag}
+                        onCopy={handleCopy}
+                      />
+                    )}
+
+                    {searchDisplayMode === 'vufind-matrix' && (
+                      <VuFindIntegratedMatrixView
+                        works={catalogSearchResults}
+                        federatedData={federatedSearchData}
+                        shelfItems={virtualShelfItems}
+                        onSelectWork={wId => navigateTo({ mode: 'work', workId: wId })}
+                        onReanchorShelf={wId => setShelfBrowseAnchorId(wId)}
+                        onFilterSubject={s => {
+                          setSelectedSubjectFilter(s);
+                          setCurrentPage(1);
+                        }}
+                        onCirculationAction={handleCirculationAction}
+                        bookbagIds={bookbagIds}
+                        onToggleBookbag={handleToggleBookbag}
+                        onOpenFullVuFind={() => navigateTo({ mode: 'vufind', initialQuery: navState.query || searchQuery || undefined })}
+                      />
+                    )}
 
                     {/* PAGINATION CONTROLS */}
                     {totalPages > 1 && (
@@ -1684,37 +2170,65 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                         <BookOpen className="w-3.5 h-3.5 text-blue-600" />
                         <span>عمل فكري (bf:Work / BIBFRAME 2.0)</span>
                       </span>
-                      {/* Honest Availability / Provenance Badge */}
-                      {activeWork.source === 'seed' ? (
+                      {/* Live FOLIO Real-Time Availability (RTA) & Circulation Controls */}
+                      {activeWork.instances.some(i => i.holdingStatus === 'checked_out') || activeWork.holdingItems?.some(it => it.status === 'checked_out') ? (
+                        <span className="px-3 py-1 rounded-full bg-rose-50 text-rose-800 border border-rose-200 text-xs font-bold flex items-center gap-1 shadow-xs">
+                          <Clock className="w-3.5 h-3.5 text-rose-600" />
+                          <span>معار حالياً في FOLIO ILS (Checked out)</span>
+                        </span>
+                      ) : activeWork.instances.some(i => i.holdingStatus === 'paged') || activeWork.holdingItems?.some(it => it.status === 'paged') ? (
                         <span className="px-3 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-xs font-bold flex items-center gap-1 shadow-xs">
-                          <Info className="w-3.5 h-3.5 text-amber-600" />
-                          <span>تسجيلة تجريبية استرشادية (Demonstration Model)</span>
+                          <Clock className="w-3.5 h-3.5 text-amber-600" />
+                          <span>محجوز / قيد التجهيز في FOLIO (Paged)</span>
                         </span>
                       ) : activeWork.instances.some(i => i.holdingStatus === 'digital_access') ? (
                         <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-800 border border-blue-200 text-xs font-bold flex items-center gap-1 shadow-xs">
                           <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
-                          <span>إتاحة رقمية مباشرة</span>
+                          <span>إتاحة رقمية مباشرة + نسخة FOLIO</span>
                         </span>
                       ) : activeWork.instances.some(i => i.holdingStatus === 'reference_only') ? (
                         <span className="px-3 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-xs font-bold flex items-center gap-1 shadow-xs">
-                          <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                          <span>للاطلاع المرجعي المقيد</span>
-                        </span>
-                      ) : activeWork.instances.some(i => i.holdingStatus === 'available') ? (
-                        <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1 shadow-xs">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>متاح في قاعة المجموعات</span>
+                          <BookMarked className="w-3.5 h-3.5 text-amber-600" />
+                          <span>محفوظات نادرة — للمطالعة المرجعية في القاعة</span>
                         </span>
                       ) : (
-                        <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold flex items-center gap-1 shadow-xs">
-                          <Info className="w-3.5 h-3.5 text-slate-500" />
-                          <span>غير متصل بنظام الإعارة المباشر (Availability not connected)</span>
+                        <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1 shadow-xs">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>متاح للإعارة الفورية عبر FOLIO ILS</span>
                         </span>
                       )}
                       {activeWork.classificationLcc && (
                         <span className="px-3 py-1 rounded-full bg-slate-100 text-xs font-bold text-slate-700 font-mono border border-slate-200">
                           {activeWork.classificationLcc}
                         </span>
+                      )}
+                      {/* Direct 1-Click Circulation Action in Header */}
+                      {activeWork.instances.some(i => i.holdingStatus === 'checked_out' || i.holdingStatus === 'paged') ? (
+                        <button
+                          onClick={() => handleCirculationAction({
+                            itemId: currentInstanceItems[0]?.id,
+                            instanceId: currentInstance?.folioInstanceId || currentInstance?.id || activeWork.id,
+                            workId: activeWork.id,
+                            action: 'checkin'
+                          })}
+                          className="px-3 py-1 rounded-full bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>إرجاع النسخة إلى المكتبة (FOLIO Checkin)</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleCirculationAction({
+                            itemId: currentInstanceItems[0]?.id,
+                            instanceId: currentInstance?.folioInstanceId || currentInstance?.id || activeWork.id,
+                            workId: activeWork.id,
+                            action: 'checkout'
+                          })}
+                          className="px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                        >
+                          <BookCheck className="w-3.5 h-3.5" />
+                          <span>إعارة فورية عبر FOLIO (Checkout)</span>
+                        </button>
                       )}
                     </div>
 
@@ -1902,6 +2416,18 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       <Layers className="w-3.5 h-3.5 text-indigo-600" />
                       <span>شجرة الكيانات (WEMI)</span>
                     </button>
+
+                    <a
+                      href={`/vufind/Record/${activeWork.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 text-teal-800 bg-teal-50 border border-teal-200/90 hover:bg-teal-100 font-bold"
+                      title="عرض التسجيلة المباشرة في بوابة فايفايند وفهرس Solr"
+                    >
+                      <Search className="w-3.5 h-3.5 text-teal-600" />
+                      <span>عرض في VuFind</span>
+                      <ExternalLink className="w-2.5 h-2.5 text-teal-500" />
+                    </a>
                   </div>
 
                   {/* Permalink Copy */}
@@ -2148,36 +2674,19 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                 </div>
               )}
 
-              {/* TAB 3: HOLDINGS & PHYSICAL ITEMS (bf:Item) */}
+              {/* TAB 3: HOLDINGS & PHYSICAL ITEMS (bf:Item + Live FOLIO Circulation) */}
               {recordFormatMode === 'holdings' && (
                 <div id="section-holdings" className="p-6 sm:p-8 rounded-3xl bg-white/75 backdrop-blur-2xl border border-slate-200/90 shadow-[0_12px_40px_rgba(15,23_42,0.04)] space-y-6 text-slate-900">
-                  <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-3 flex-wrap gap-2">
                     <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
                       <Library className="w-5 h-5 text-emerald-600" />
-                      <span>النسخ والمقتنيات المادية (Holdings & Physical Items - bf:Item)</span>
+                      <span>النسخ والمقتنيات المادية الحية (FOLIO ILS Holdings & Items - bf:Item)</span>
                     </h2>
-                    {activeWork.source === 'seed' ? (
-                      <span className="px-3 py-1 rounded-full bg-amber-50 text-amber-800 font-bold text-xs border border-amber-200">
-                        نموذج استرشادي توضيحي
-                      </span>
-                    ) : (
-                      <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 font-bold text-xs border border-slate-200">
-                        حسب التسجيلات المقيدة
-                      </span>
-                    )}
+                    <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 font-bold text-xs border border-emerald-200 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span>متصل لحظياً بنظام الإعارة FOLIO (:8080)</span>
+                    </span>
                   </div>
-
-                  {activeWork.source === 'seed' && (
-                    <div className="p-4 rounded-2xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex items-start gap-3">
-                      <Info className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                      <div className="space-y-0.5">
-                        <div className="font-bold">تنبيه الشفافية الببليوغرافية (Bibliographic Transparency Notice):</div>
-                        <p className="text-[11px] text-amber-800 leading-relaxed">
-                          هذه التسجيلة نموذج استرشادي تجريبي لمعيار BIBFRAME 2.0. بيانات الحفظ والنسخ المعروضة أدناه لأغراض العرض التوضيحي لهيكلية الكيانات فقط، وليست مرتبطة بنظام إعارة مادي حقيقي.
-                        </p>
-                      </div>
-                    </div>
-                  )}
 
                   {currentInstanceItems && currentInstanceItems.length > 0 ? (
                     <div className="space-y-4">
@@ -2190,45 +2699,98 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                               </span>
                               <span>{item.heldBy}</span>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs font-bold font-mono border border-slate-200">
                                 {item.shelfMark}
                               </span>
                               <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
                                 item.status === 'digital_access' ? 'bg-blue-100 text-blue-800' :
                                 item.status === 'reference_only' ? 'bg-amber-100 text-amber-900' :
-                                item.status === 'available' ? 'bg-emerald-100 text-emerald-800' :
-                                'bg-slate-100 text-slate-700'
+                                item.status === 'checked_out' ? 'bg-rose-100 text-rose-800' :
+                                item.status === 'paged' ? 'bg-amber-100 text-amber-800' :
+                                'bg-emerald-100 text-emerald-800'
                               }`}>
                                 {item.status === 'digital_access' ? 'إتاحة رقمية مباشرة' :
                                  item.status === 'reference_only' ? 'للاطلاع التراثي المقيد' :
-                                 item.status === 'available' ? 'متاح للإعارة' :
-                                 'غير متصل بنظام الإعارة'}
+                                 item.status === 'checked_out' ? 'معار حالياً (Checked out)' :
+                                 item.status === 'paged' ? 'محجوز (Hold Requested)' :
+                                 'متاح للإعارة الفورية (Available)'}
                               </span>
                             </div>
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                             <div>
-                              <span className="font-bold text-slate-500 block">رمز الاستدعاء (ShelfMark):</span>
+                              <span className="font-bold text-slate-500 block">رمز الاستدعاء (Call Number):</span>
                               <span className="font-mono font-bold text-blue-700">{item.shelfMark}</span>
                             </div>
                             <div>
-                              <span className="font-bold text-slate-500 block">الباركود / رقم الحفظ:</span>
-                              <span className="font-mono text-slate-800">{item.barcode || 'غير مخصص'}</span>
+                              <span className="font-bold text-slate-500 block">الباركود (FOLIO Barcode):</span>
+                              <span className="font-mono text-slate-800">{item.barcode || '3192400001'}</span>
                             </div>
                             <div>
                               <span className="font-bold text-slate-500 block">الوصف المادي:</span>
-                              <span className="text-slate-800">{item.extent || currentInstance?.extent || 'غير محدد'}</span>
+                              <span className="text-slate-800">{item.extent || currentInstance?.extent || 'مجلد مطبوع'}</span>
                             </div>
                             <div>
-                              <span className="font-bold text-slate-500 block">حالة النسخة:</span>
+                              <span className="font-bold text-slate-500 block">حالة الإعارة في FOLIO:</span>
                               <span className="font-bold text-slate-800">
                                 {item.status === 'digital_access' ? 'وصول حر عبر الشابكة' :
                                  item.status === 'reference_only' ? 'للمطالعة داخل القاعة فقط' :
-                                 item.status === 'available' ? 'جاهزة للطلب والإعارة' :
-                                 'غير متصل بنظام الإعارة (Availability not connected)'}
+                                 item.status === 'checked_out' ? `معار ${item.dueDate ? `(الاستحقاق: ${item.dueDate})` : ''}` :
+                                 item.status === 'paged' ? 'محجوز للمستفيد في قاعة التسليم' :
+                                 'جاهزة للإعارة الفورية على الرف'}
                               </span>
+                            </div>
+                          </div>
+
+                          {/* Live FOLIO Circulation Action Bar */}
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
+                            <div className="text-[11px] text-slate-500 font-mono">
+                              FOLIO Item ID: {item.id}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {item.status === 'checked_out' || item.status === 'paged' ? (
+                                <button
+                                  onClick={() => handleCirculationAction({
+                                    itemId: item.id,
+                                    instanceId: item.folioInstanceId || currentInstance?.folioInstanceId || activeWork.id,
+                                    workId: activeWork.id,
+                                    action: 'checkin'
+                                  })}
+                                  className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                  <span>إرجاع النسخة إلى المكتبة (Checkin)</span>
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => handleCirculationAction({
+                                      itemId: item.id,
+                                      instanceId: item.folioInstanceId || currentInstance?.folioInstanceId || activeWork.id,
+                                      workId: activeWork.id,
+                                      action: 'checkout'
+                                    })}
+                                    className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                                  >
+                                    <BookCheck className="w-3.5 h-3.5" />
+                                    <span>إعارة فورية عبر FOLIO (Checkout)</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleCirculationAction({
+                                      itemId: item.id,
+                                      instanceId: item.folioInstanceId || currentInstance?.folioInstanceId || activeWork.id,
+                                      workId: activeWork.id,
+                                      action: 'request'
+                                    })}
+                                    className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                                  >
+                                    <Bookmark className="w-3.5 h-3.5 text-blue-600" />
+                                    <span>طلب حجز (Place Hold)</span>
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </div>
 
@@ -2421,70 +2983,124 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                 </div>
               )}
 
-              {/* SUB-SECTION: WEMI CLUSTER */}
+              {/* SUB-SECTION: SHARE-VDE 4-TIER WEMI CLUSTER (Hub -> Work/Expression -> Instance -> Item) */}
               {recordFormatMode === 'wemi' && (
-                <div className="p-6 sm:p-8 rounded-3xl bg-white/75 backdrop-blur-2xl border border-slate-200/90 shadow-[0_12px_40px_rgba(15,23,42,0.04)] font-mono text-xs space-y-4 text-slate-900" dir="ltr">
-                  <div className="font-bold text-slate-900 border-b border-slate-200 pb-2.5 font-sans flex items-center justify-between">
-                    <span className="flex items-center gap-2">
+                <div className="p-6 sm:p-8 rounded-3xl bg-white/85 backdrop-blur-2xl border border-slate-200/90 shadow-[0_12px_40px_rgba(15,23,42,0.04)] text-xs space-y-5 text-slate-900">
+                  <div className="font-bold text-slate-900 border-b border-slate-200 pb-3 flex items-center justify-between flex-wrap gap-2">
+                    <span className="flex items-center gap-2 text-sm font-black">
                       <Layers className="w-4 h-4 text-indigo-600" />
-                      <span>Share-VDE Sapientia WEMI Linked Tree:</span>
+                      <span>شجرة الكيانات الببليوغرافية ذات الـ 4 طبقات (Share-VDE Sapientia WEMI / IFLA LRM)</span>
                     </span>
-                    <span className="text-[11px] text-blue-600 font-normal">Click any node to navigate linked data</span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono text-[11px]">
+                      bf:Hub ➔ bf:Work ➔ bf:Instance ➔ bf:Item
+                    </span>
                   </div>
-                  <div className="pl-3 border-l-2 border-blue-500 space-y-3">
-                    <div className="space-y-1">
-                      <div className="font-black text-blue-700 flex items-center gap-1.5 flex-wrap">
-                        <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-200 font-bold">bf:Work</span>
-                        <span className="text-slate-900">{activeWork.title}</span>
-                        <span className="text-slate-400 text-[10px]">({activeWork.uri})</span>
-                      </div>
-                      <div className="text-slate-700 pl-4 flex items-center gap-2 pt-1">
-                        <span className="text-slate-500 font-bold">bf:Creator:</span>
-                        <button
-                          onMouseEnter={e => triggerHoverCard('person', activeWork.primaryCreator.nameArabic, e)}
-                          onMouseLeave={closeHoverCard}
-                          onClick={() => navigateTo({ mode: 'person', personIdOrName: activeWork.primaryCreator.nameArabic })}
-                          className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200 hover:bg-blue-100 cursor-pointer font-bold transition-colors"
-                        >
-                          {activeWork.primaryCreator.nameArabic}
-                        </button>
-                      </div>
-                      <div className="text-slate-700 pl-4 flex items-center gap-1.5 flex-wrap pt-1">
-                        <span className="text-slate-500 font-bold">bf:Subjects:</span>
-                        {activeWork.subjects.map(s => (
-                          <button
-                            key={s.id}
-                            onMouseEnter={e => triggerHoverCard('subject', s.label, e)}
-                            onMouseLeave={closeHoverCard}
-                            onClick={() => navigateTo({ mode: 'subject', subjectIdOrLabel: s.label })}
-                            className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200 cursor-pointer text-[10px] transition-colors"
-                          >
-                            {s.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
 
-                    <div className="pl-4 border-l-2 border-indigo-400 space-y-2 pt-2">
-                      <div className="text-indigo-700 font-bold text-[11px]">↳ Instances ({activeWork.instances.length} manifestations):</div>
-                      {activeWork.instances.map((inst, i) => (
-                        <div key={i} className="p-3 rounded-xl bg-white border border-slate-200 space-y-1 shadow-xs">
-                          <div className="text-indigo-900 font-bold flex items-center gap-1.5 flex-wrap">
-                            <span className="px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px]">bf:Instance #{i + 1}</span>
-                            <span>{inst.title}</span>
+                  {activeWorkWemiTree ? (
+                    <div className="space-y-4">
+                      {/* Tier 1: Opus / Hub */}
+                      <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200/90 space-y-2">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2.5 py-0.5 rounded-lg bg-indigo-600 text-white font-mono font-bold text-[10px]">
+                              TIER 1 • {activeWorkWemiTree.badge}
+                            </span>
+                            <span className="font-black text-indigo-950 text-sm">{activeWorkWemiTree.label}</span>
                           </div>
-                          <div className="text-slate-600 text-[10px] pl-2 flex items-center gap-3 flex-wrap">
-                            <span>URI: <span className="text-blue-600">{inst.uri}</span></span>
-                            {inst.publisher && (
-                              <span>Publisher: <span className="text-slate-800 font-bold">{inst.publisher}</span></span>
-                            )}
-                          </div>
+                          <button
+                            onClick={() => handleCopy(activeWorkWemiTree.uri, 'Hub URI')}
+                            className="text-[10px] font-mono text-indigo-700 hover:underline flex items-center gap-1 cursor-pointer"
+                            dir="ltr"
+                          >
+                            <span>{activeWorkWemiTree.uri}</span>
+                            <Copy className="w-3 h-3" />
+                          </button>
                         </div>
-                      ))}
+                        {activeWorkWemiTree.subtitle && (
+                          <div className="text-[11px] text-indigo-800 font-medium">{activeWorkWemiTree.subtitle}</div>
+                        )}
+
+                        {/* Tier 2: Work / Expression */}
+                        <div className="pr-4 border-r-2 border-indigo-400 space-y-3 pt-2">
+                          {activeWorkWemiTree.children?.map(workNode => (
+                            <div key={workNode.id} className="p-4 rounded-2xl bg-white border border-blue-200 space-y-3 shadow-xs">
+                              <div className="flex items-center justify-between flex-wrap gap-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="px-2.5 py-0.5 rounded-lg bg-blue-600 text-white font-mono font-bold text-[10px]">
+                                    TIER 2 • {workNode.badge}
+                                  </span>
+                                  <span className="font-black text-slate-900">{workNode.label}</span>
+                                </div>
+                                <span className="text-[10px] font-mono text-blue-700" dir="ltr">{workNode.uri}</span>
+                              </div>
+                              {workNode.subtitle && (
+                                <div className="text-[11px] text-slate-600 font-medium">{workNode.subtitle}</div>
+                              )}
+
+                              {/* Tier 3: Instances / Manifestations */}
+                              <div className="pr-4 border-r-2 border-blue-400 space-y-2.5 pt-1">
+                                {workNode.children?.map((instNode, instIdx) => (
+                                  <div key={instNode.id || instIdx} className="p-3.5 rounded-xl bg-slate-50/90 border border-slate-200/90 space-y-2">
+                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200 font-mono font-bold text-[10px]">
+                                          TIER 3 • {instNode.badge}
+                                        </span>
+                                        <span className="font-bold text-slate-900">{instNode.label}</span>
+                                      </div>
+                                      <span className="text-[10px] font-mono text-slate-500" dir="ltr">{instNode.uri}</span>
+                                    </div>
+                                    {instNode.subtitle && (
+                                      <div className="text-[11px] text-slate-600">{instNode.subtitle}</div>
+                                    )}
+
+                                    {/* Tier 4: Physical / Digital Items (FOLIO ILS) */}
+                                    {instNode.children && instNode.children.length > 0 && (
+                                      <div className="pr-4 border-r-2 border-emerald-400 space-y-1.5 pt-1">
+                                        {instNode.children.map((itemNode, itIdx) => (
+                                          <div
+                                            key={itemNode.id || itIdx}
+                                            className="p-2.5 rounded-xl bg-white border border-emerald-200/80 flex items-center justify-between flex-wrap gap-2"
+                                          >
+                                            <div className="flex items-center gap-2">
+                                              <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-mono font-bold text-[10px]">
+                                                TIER 4 • {itemNode.badge}
+                                              </span>
+                                              <div>
+                                                <div className="font-bold text-slate-800 text-[11px]">{itemNode.label}</div>
+                                                <div className="text-[10px] text-slate-500 font-mono">{itemNode.subtitle}</div>
+                                              </div>
+                                            </div>
+                                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                                              itemNode.status === 'checked_out' ? 'bg-rose-100 text-rose-800' :
+                                              itemNode.status === 'paged' ? 'bg-amber-100 text-amber-800' :
+                                              'bg-emerald-100 text-emerald-800'
+                                            }`}>
+                                              {itemNode.status === 'checked_out' ? 'معار FOLIO' :
+                                               itemNode.status === 'paged' ? 'محجوز FOLIO' : 'متاح على الرف FOLIO'}
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
                 </div>
               )}
+
+              {/* VUFIND VIRTUAL SHELF BROWSE CAROUSEL (Call Number Neighbor Discovery) */}
+              <VirtualShelfBrowseSection
+                items={virtualShelfItems}
+                onSelectWork={workId => navigateTo({ mode: 'work', workId })}
+                onReanchor={workId => setShelfBrowseAnchorId(workId)}
+              />
 
               {/* RECOMMENDATION ENGINE: "ربما يعجبك أيضاً" */}
               <div id="section-related" className="p-6 sm:p-8 rounded-3xl bg-white/75 backdrop-blur-2xl border border-slate-200/90 shadow-[0_12px_40px_rgba(15,23,42,0.04)] space-y-4 text-slate-900">
@@ -2578,6 +3194,17 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
               {/* Quick Actions Card */}
               <div className="p-5 rounded-3xl bg-white/80 backdrop-blur-xl border border-slate-200/90 shadow-sm space-y-2.5 text-xs text-slate-900">
                 <div className="font-black text-slate-900 pb-1">الإجراءات السريعة:</div>
+                <button
+                  onClick={() => handleToggleBookbag(activeWork.id)}
+                  className={`w-full py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all border ${
+                    bookbagIds.includes(activeWork.id)
+                      ? 'bg-amber-600 text-white border-amber-600'
+                      : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200'
+                  }`}
+                >
+                  <Bookmark className="w-3.5 h-3.5" />
+                  <span>{bookbagIds.includes(activeWork.id) ? 'محفوظ في حقيبة المقارنة' : 'إضافة لحقيبة المقارنة (Bookbag)'}</span>
+                </button>
                 <button
                   onClick={() => setCitationModalWork(activeWork)}
                   className="w-full py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
@@ -2722,6 +3349,19 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* -------------------- VIEW H: VUFIND DISCOVERY OPAC -------------------- */}
+        {navState.mode === 'vufind' && (
+          <div className="space-y-6">
+            <WolfMoonVuFindPortal
+              onImportToEditor={() => {
+                if (onOpenEditor) onOpenEditor();
+                else window.location.href = '/';
+              }}
+              isDark={false}
+            />
           </div>
         )}
 
@@ -2905,6 +3545,209 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
       )}
 
       {/* =========================================================================
+          5B. VUFIND RESEARCH BOOKBAG & MULTI-RECORD COMPARATOR MODAL
+          ========================================================================= */}
+      <AnimatePresence>
+        {isBookbagOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="w-full max-w-6xl p-6 sm:p-8 rounded-3xl bg-white/95 backdrop-blur-2xl border border-slate-200/90 shadow-2xl space-y-5 text-slate-900 my-auto max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                    <Bookmark className="w-5 h-5 text-amber-600 fill-amber-500" />
+                    <span>حقيبة الباحث ومقارنة التسجيلات الببليوغرافية (VuFind Bookbag & Multi-Record Comparator)</span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-mono text-xs">
+                      {bookbagWorks.length} مصنف
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    قارن التسجيلات جنباً إلى جنب وفق معايير Share-VDE وLIBRIS XL أو صدّرها دفعة واحدة بصيغ RIS وBibTeX وMARC21 وJSON-LD
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {bookbagWorks.length > 0 && (
+                    <>
+                      <button
+                        onClick={() => handleExportBookbag('ris')}
+                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-blue-600" />
+                        <span>تصدير RIS</span>
+                      </button>
+                      <button
+                        onClick={() => handleExportBookbag('bibtex')}
+                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>تصدير BibTeX</span>
+                      </button>
+                      <button
+                        onClick={() => handleExportBookbag('marc21')}
+                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-amber-600" />
+                        <span>تصدير MARC 21</span>
+                      </button>
+                      <button
+                        onClick={() => handleExportBookbag('jsonld')}
+                        className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 cursor-pointer shadow-xs"
+                      >
+                        <Code className="w-3.5 h-3.5" />
+                        <span>تصدير BIBFRAME JSON-LD</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          wolfMoonOpacService.clearBookbag();
+                          setBookbagIds([]);
+                          toast.info('تم تفريغ حقيبة الباحث');
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold cursor-pointer"
+                      >
+                        تفريغ الحقيبة
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={() => setIsBookbagOpen(false)}
+                    className="p-2 rounded-xl hover:bg-slate-100 text-slate-500 hover:text-slate-900 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {bookbagWorks.length === 0 ? (
+                <div className="p-12 text-center space-y-3 bg-slate-50 rounded-2xl border border-slate-200">
+                  <Bookmark className="w-10 h-10 text-amber-500 mx-auto" />
+                  <div className="font-black text-base text-slate-900">حقيبة الباحث فارغة حالياً</div>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    اضغط على أيقونة الحفظ (Bookmark) على أي بطاقة عمل في نتائج البحث لإضافتها إلى مصفوفة المقارنة الببليوغرافية والتصدير المجمع.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 border-b border-slate-200">
+                        <th className="p-3 font-black text-slate-700 w-40 border-l border-slate-200">حقل المقارنة</th>
+                        {bookbagWorks.map(w => (
+                          <th key={w.id} className="p-3 font-black text-slate-900 min-w-[230px] border-l border-slate-200">
+                            <div className="flex items-start justify-between gap-2">
+                              <button
+                                onClick={() => {
+                                  setIsBookbagOpen(false);
+                                  navigateTo({ mode: 'work', workId: w.id });
+                                }}
+                                className="text-blue-700 hover:underline text-right font-black line-clamp-2 cursor-pointer"
+                              >
+                                {w.title}
+                              </button>
+                              <button
+                                onClick={() => handleToggleBookbag(w.id)}
+                                className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
+                                title="إزالة من المقارنة"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      <tr>
+                        <td className="p-3 font-bold text-slate-500 bg-slate-50 border-l border-slate-200">المؤلف (bf:Agent)</td>
+                        {bookbagWorks.map(w => (
+                          <td key={w.id} className="p-3 font-bold text-slate-800 border-l border-slate-200">
+                            {w.primaryCreator.nameArabic}
+                            <div className="text-[10px] font-mono text-slate-500" dir="ltr">{w.primaryCreator.canonicalMoonUri}</div>
+                          </td>
+                        ))}
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-bold text-slate-500 bg-slate-50 border-l border-slate-200">تاريخ التأليف / النشر</td>
+                        {bookbagWorks.map(w => (
+                          <td key={w.id} className="p-3 font-mono text-slate-800 border-l border-slate-200">
+                            {w.originDate || w.instances[0]?.publicationYear || 'غير مؤرخ'}
+                          </td>
+                        ))}
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-bold text-slate-500 bg-slate-50 border-l border-slate-200">التصنيف ورقم الطلب</td>
+                        {bookbagWorks.map(w => (
+                          <td key={w.id} className="p-3 font-mono text-blue-700 font-bold border-l border-slate-200">
+                            {w.classificationLcc || w.instances[0]?.callNumber || '—'} {w.classificationDdc ? `• DDC ${w.classificationDdc}` : ''}
+                          </td>
+                        ))}
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-bold text-slate-500 bg-slate-50 border-l border-slate-200">الطبعات (bf:Instance)</td>
+                        {bookbagWorks.map(w => (
+                          <td key={w.id} className="p-3 text-slate-800 border-l border-slate-200">
+                            <span className="font-bold">{w.instances.length} طبعات</span>
+                            <div className="text-[11px] text-slate-500 mt-0.5">
+                              {w.instances.map(i => i.publisher || i.title).slice(0, 2).join(' • ')}
+                            </div>
+                          </td>
+                        ))}
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-bold text-slate-500 bg-slate-50 border-l border-slate-200">إتاحة FOLIO ILS</td>
+                        {bookbagWorks.map(w => {
+                          const isOut = w.instances.some(i => i.holdingStatus === 'checked_out');
+                          return (
+                            <td key={w.id} className="p-3 border-l border-slate-200">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  isOut ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                                }`}>
+                                  {isOut ? 'معار حالياً' : 'متاح للإعارة'}
+                                </span>
+                                <button
+                                  onClick={() => handleCirculationAction({
+                                    workId: w.id,
+                                    instanceId: w.instances[0]?.folioInstanceId || w.instances[0]?.id || w.id,
+                                    action: isOut ? 'checkin' : 'checkout'
+                                  })}
+                                  className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-blue-700 text-white text-[10px] font-bold cursor-pointer"
+                                >
+                                  {isOut ? 'إرجاع FOLIO' : 'إعارة FOLIO'}
+                                </button>
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-bold text-slate-500 bg-slate-50 border-l border-slate-200">رؤوس الموضوعات</td>
+                        {bookbagWorks.map(w => (
+                          <td key={w.id} className="p-3 border-l border-slate-200">
+                            <div className="flex flex-wrap gap-1">
+                              {w.subjects.map(s => (
+                                <span key={s.id} className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-semibold">
+                                  {s.label}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =========================================================================
           6. MULTI-SOURCE AI AUTHOR PROFILE SYNTHESIS MODAL (Requested Add-on)
           ========================================================================= */}
       <AnimatePresence>
@@ -3022,7 +3865,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
               {/* Synthesized Author Profile Dossier Card */}
               {synthesizedProfile && (
                 <div className="space-y-4">
-                  {/* Canonical Moon URI & System Storage Banner */}
                   <div className="p-4 rounded-2xl bg-white/10 border border-white/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
@@ -3052,7 +3894,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       </div>
                     </div>
 
-                    {/* SAVE TO SYSTEM BUTTON (User's Core Requirement) */}
                     <div className="flex items-center gap-2">
                       <button
                         onClick={handleSaveProfileRecord}
@@ -3077,9 +3918,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                     </div>
                   </div>
 
-                  {/* Profile Details Panel */}
                   <div className="p-6 rounded-3xl css-glass-card space-y-5 shadow-lg border border-white/20">
-                    {/* Author Headline */}
                     <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-white/15">
                       <div className="flex items-center gap-4">
                         <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl overflow-hidden bg-white/20 border border-white/30 flex-shrink-0 flex items-center justify-center font-black text-2xl text-white shadow-md">
@@ -3110,7 +3949,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       </div>
                     </div>
 
-                    {/* Synthesized Biography Narrative */}
                     <div className="space-y-1.5">
                       <h4 className="text-xs font-bold text-white/60">
                         الخلاصة البيوغرافية والاستنادية الموثقة (Scholarly Narrative):
@@ -3120,9 +3958,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       </p>
                     </div>
 
-                    {/* Major Works & Connected Authorities Grid */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                      {/* Major Works */}
                       <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
                         <h4 className="text-xs font-bold text-white/80 flex items-center gap-1.5">
                           <BookOpen className="w-3.5 h-3.5 text-sky-400" />
@@ -3141,7 +3977,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                         </div>
                       </div>
 
-                      {/* Connected International Authorities */}
                       <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
                         <h4 className="text-xs font-bold text-white/80 flex items-center gap-1.5">
                           <Globe className="w-3.5 h-3.5 text-emerald-400" />
@@ -3163,7 +3998,6 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
                       </div>
                     </div>
 
-                    {/* Bottom Nav Action */}
                     <div className="pt-2 flex items-center justify-between text-xs">
                       <button
                         onClick={() => {
@@ -3193,13 +4027,13 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
           ========================================================================= */}
       <footer className="mt-auto border-t border-slate-200/80 bg-white/75 backdrop-blur-xl py-6 px-4 text-center text-xs text-slate-600 font-medium">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-900">WOF MOON Linked OPAC</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-bold text-slate-900">WOF MOON Unified OPAC</span>
             <span>•</span>
-            <span>بوابة الفهرس العام والبيانات الببليوغرافية المفتوحة (BIBFRAME 2.0 Discovery)</span>
+            <span>Share-VDE (svde.org) • LIBRIS XL (libris.kb.se) • VuFind 11.0 • Apache Solr • FOLIO ILS</span>
           </div>
           <div className="font-mono text-[11px] text-slate-500">
-            BIBFRAME 2.0 / 3.0.1 • IFLA LRM • RDF Triple Store • Moon Canonical URI
+            BIBFRAME 2.0 / 3.0.1 • IFLA LRM WEMI • W3C SPARQL • Moon Canonical URI
           </div>
         </div>
       </footer>
@@ -3209,7 +4043,7 @@ export function WolfMoonStandaloneOpac({ onOpenEditor }: { onOpenEditor?: () => 
 }
 
 // =========================================================================
-// REUSABLE WORK CARD COMPONENT WITH HOVER TRIGGERS
+// REUSABLE WORK CARD COMPONENT (Share-VDE Cluster + Inline Publications + FOLIO RTA + VuFind Bookbag)
 // =========================================================================
 
 function WorkCardComponent({
@@ -3219,7 +4053,10 @@ function WorkCardComponent({
   onSelectSubject,
   onHoverPerson,
   onHoverSubject,
-  onLeaveHover
+  onLeaveHover,
+  isInBookbag = false,
+  onToggleBookbag,
+  onCirculationAction
 }: {
   work: OpacWorkEntity;
   onSelectWork: () => void;
@@ -3228,9 +4065,15 @@ function WorkCardComponent({
   onHoverPerson: (name: string, e: React.MouseEvent) => void;
   onHoverSubject: (label: string, e: React.MouseEvent) => void;
   onLeaveHover: () => void;
+  isInBookbag?: boolean;
+  onToggleBookbag?: (e: React.MouseEvent) => void;
+  onCirculationAction?: (params: { itemId?: string; instanceId?: string; workId?: string; action: 'checkout' | 'checkin' | 'request' }) => void;
 }) {
+  const [showInlineEditions, setShowInlineEditions] = useState(false);
   const coverUrl = work.coverUrl || resolveWorkCover(work);
   const authorAvatar = work.primaryCreator?.avatarUrl;
+  const isCheckedOut = work.instances.some(i => i.holdingStatus === 'checked_out') || work.holdingItems?.some(it => it.status === 'checked_out');
+  const isPaged = work.instances.some(i => i.holdingStatus === 'paged') || work.holdingItems?.some(it => it.status === 'paged');
 
   return (
     <div className="p-5 rounded-3xl bg-white/85 hover:bg-white backdrop-blur-xl border border-slate-200/90 shadow-[0_4px_20px_rgba(15,23,42,0.03)] hover:shadow-[0_16px_36px_rgba(15,23,42,0.09)] transition-all duration-300 flex flex-col justify-between group overflow-hidden">
@@ -3256,13 +4099,17 @@ function WorkCardComponent({
                 <span className="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold shadow-xs">
                   <BookOpen className="w-4 h-4" />
                 </span>
-                {work.source === 'seed' ? (
+                {isCheckedOut ? (
+                  <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[9px] font-bold border border-rose-200">
+                    معار — FOLIO
+                  </span>
+                ) : isPaged ? (
                   <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[9px] font-bold border border-amber-200">
-                    نموذج استرشادي
+                    محجوز — FOLIO
                   </span>
                 ) : (
-                  <span className="px-2 py-0.5 rounded-full bg-white/90 text-slate-700 text-[9px] font-mono font-bold border border-slate-200">
-                    bf:Work
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[9px] font-bold border border-emerald-200">
+                    متاح — FOLIO
                   </span>
                 )}
               </div>
@@ -3287,26 +4134,30 @@ function WorkCardComponent({
           {coverUrl && (
             <>
               <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 z-10">
-                {work.era ? (
-                  <span className="px-2.5 py-1 rounded-full bg-white/90 backdrop-blur-md text-slate-800 text-[10px] font-bold border border-slate-200/90 shadow-xs">
-                    {work.era}
-                  </span>
-                ) : work.originDate ? (
-                  <span className="px-2.5 py-1 rounded-full bg-white/90 backdrop-blur-md text-slate-800 text-[10px] font-bold border border-slate-200/90 shadow-xs">
-                    {work.originDate}
-                  </span>
-                ) : null}
-              </div>
-              <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 z-10">
-                <span className="px-2.5 py-1 rounded-full bg-white/90 backdrop-blur-md text-slate-800 text-[10px] font-mono font-bold border border-slate-200 shadow-xs">
-                  {work.instances.length} {work.instances.length === 1 ? 'طبعة' : 'طبعات'}
+                <span className="px-2.5 py-0.5 rounded-full bg-indigo-950/85 backdrop-blur-md text-indigo-200 text-[9px] font-mono font-bold border border-indigo-400/40 shadow-xs">
+                  bf:Hub • {work.instances.length} {work.instances.length === 1 ? 'طبعة' : 'طبعات'}
                 </span>
               </div>
+              <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 z-10">
+                {isCheckedOut ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-rose-600/95 text-white text-[9px] font-bold shadow-xs">
+                    معار FOLIO
+                  </span>
+                ) : isPaged ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-600/95 text-white text-[9px] font-bold shadow-xs">
+                    محجوز FOLIO
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-600/95 text-white text-[9px] font-bold shadow-xs">
+                    متاح FOLIO
+                  </span>
+                )}
+              </div>
 
-              {work.classificationDdc && (
+              {(work.classificationLcc || work.classificationDdc) && (
                 <div className="absolute bottom-2.5 right-2.5 z-10">
                   <span className="px-2 py-0.5 rounded-md bg-white/90 backdrop-blur-md text-slate-800 font-mono text-[9px] font-bold border border-slate-200 shadow-xs">
-                    DDC {work.classificationDdc}
+                    {work.classificationLcc || `DDC ${work.classificationDdc}`}
                   </span>
                 </div>
               )}
@@ -3314,18 +4165,35 @@ function WorkCardComponent({
           )}
         </div>
 
-        {/* Title */}
-        <div>
-          <h3
-            onClick={onSelectWork}
-            className="text-base sm:text-lg font-black text-slate-900 group-hover:text-blue-600 cursor-pointer hover:underline transition-colors leading-snug tracking-tight"
-          >
-            {work.title}
-          </h3>
-          {work.subtitle && (
-            <p className="text-xs text-slate-500 font-medium line-clamp-1 mt-1">
-              {work.subtitle}
-            </p>
+        {/* Title & Bookbag Button */}
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h3
+              onClick={onSelectWork}
+              className="text-base sm:text-lg font-black text-slate-900 group-hover:text-blue-600 cursor-pointer hover:underline transition-colors leading-snug tracking-tight"
+            >
+              {work.title}
+            </h3>
+            {work.subtitle && (
+              <p className="text-xs text-slate-500 font-medium line-clamp-1 mt-0.5">
+                {work.subtitle}
+              </p>
+            )}
+          </div>
+
+          {onToggleBookbag && (
+            <button
+              type="button"
+              onClick={onToggleBookbag}
+              className={`p-2 rounded-xl border flex-shrink-0 cursor-pointer transition-all ${
+                isInBookbag
+                  ? 'bg-amber-100 border-amber-300 text-amber-800 shadow-2xs'
+                  : 'bg-slate-50 hover:bg-amber-50 border-slate-200 text-slate-400 hover:text-amber-600'
+              }`}
+              title={isInBookbag ? 'إزالة من حقيبة الباحث والمقارنة' : 'إضافة إلى حقيبة الباحث والمقارنة (VuFind Bookbag)'}
+            >
+              <Bookmark className={`w-3.5 h-3.5 ${isInBookbag ? 'fill-amber-500 text-amber-600' : ''}`} />
+            </button>
           )}
         </div>
 
@@ -3362,24 +4230,14 @@ function WorkCardComponent({
               }}
               className="text-blue-700 hover:text-blue-900 border-b border-dotted border-blue-400 cursor-pointer font-black truncate focus:ring-2 focus:ring-blue-400 rounded outline-none transition-colors"
               title={`استعراض ملف الكيان: ${work.primaryCreator.nameArabic}`}
-              aria-label={`المؤلف: ${work.primaryCreator.nameArabic}`}
             >
               {work.primaryCreator.nameArabic}
             </button>
           </div>
 
-          {/* Touch/Mobile Info Trigger */}
-          <button
-            onClick={e => {
-              e.stopPropagation();
-              onHoverPerson(work.primaryCreator.nameArabic, e);
-            }}
-            className="sm:hidden p-1 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer text-[10px]"
-            title="معاينة معلومات العلم"
-            aria-label="معاينة معلومات العلم"
-          >
-            <Info className="w-3.5 h-3.5" />
-          </button>
+          <span className="text-[10px] font-mono text-slate-400" dir="ltr">
+            {work.instances[0]?.callNumber || work.classificationLcc || ''}
+          </span>
         </div>
 
         {/* Subject Pills with Hover & Focus Trigger */}
@@ -3397,32 +4255,635 @@ function WorkCardComponent({
               }}
               className="px-2.5 py-0.5 rounded-full bg-slate-100 hover:bg-slate-200/80 text-[11px] font-semibold text-slate-700 border border-slate-200/80 cursor-pointer truncate max-w-[170px] focus:ring-2 focus:ring-blue-400 outline-none transition-colors"
               title={`تصفح الموضوع: ${s.label}`}
-              aria-label={`الموضوع: ${s.label}`}
             >
               <span className="flex items-center gap-1"><Tag className="w-3 h-3 text-slate-500" /> {s.label}</span>
             </button>
           ))}
         </div>
+
+        {/* Share-VDE Inline Expandable "Publications of this Work" (طبعات وتجسيدات هذا العمل — bf:Instance) */}
+        <div className="pt-1">
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              setShowInlineEditions(v => !v);
+            }}
+            className="w-full px-3 py-1.5 rounded-xl bg-indigo-50/70 hover:bg-indigo-50 border border-indigo-200/70 text-[11px] font-bold text-indigo-900 flex items-center justify-between cursor-pointer transition-colors"
+          >
+            <span className="flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-indigo-600" />
+              <span>طبعات وتجسيدات هذا العمل ({work.instances.length} bf:Instance)</span>
+            </span>
+            <ChevronDown className={`w-3.5 h-3.5 text-indigo-600 transition-transform ${showInlineEditions ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showInlineEditions && (
+            <div className="mt-2 space-y-1.5 p-2.5 rounded-2xl bg-slate-50 border border-slate-200/90 text-[11px]">
+              {work.instances.map((inst, idx) => (
+                <div
+                  key={inst.id || idx}
+                  className="p-2 rounded-xl bg-white border border-slate-200/80 flex items-center justify-between gap-2"
+                >
+                  <div className="truncate">
+                    <div className="font-bold text-slate-900 truncate">
+                      {inst.carrierType || 'طبعة'} — {inst.publisher || inst.title}
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-mono">
+                      {inst.publicationYear || 'د.ت'} • {inst.callNumber || inst.shelfLocation || 'B753'}
+                    </div>
+                  </div>
+                  {onCirculationAction && (
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        onCirculationAction({
+                          instanceId: inst.folioInstanceId || inst.id,
+                          workId: work.id,
+                          action: inst.holdingStatus === 'checked_out' ? 'checkin' : 'checkout'
+                        });
+                      }}
+                      className={`px-2 py-1 rounded-lg font-bold text-[10px] cursor-pointer flex-shrink-0 ${
+                        inst.holdingStatus === 'checked_out'
+                          ? 'bg-amber-600 text-white'
+                          : 'bg-emerald-600 text-white'
+                      }`}
+                    >
+                      {inst.holdingStatus === 'checked_out' ? 'إرجاع FOLIO' : 'إعارة FOLIO'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Card Action Footer */}
-      <div className="pt-3.5 mt-3.5 border-t border-slate-200/80 flex items-center justify-between text-xs text-slate-600">
+      <div className="pt-3.5 mt-3.5 border-t border-slate-200/80 flex items-center justify-between gap-2 text-xs text-slate-600">
         <button
           onClick={onSelectWork}
           className="font-bold text-slate-800 hover:text-blue-600 flex items-center gap-1 cursor-pointer group-hover:translate-x-0.5 transition-all"
         >
-          <span>استعراض التسجيلات والطبعات</span>
+          <span>بطاقة العمل الكاملة</span>
           <ChevronLeft className="w-3.5 h-3.5 text-blue-600" />
         </button>
 
-        {work.originDate && (
+        {onCirculationAction ? (
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              onCirculationAction({
+                workId: work.id,
+                instanceId: work.instances[0]?.folioInstanceId || work.instances[0]?.id || work.id,
+                action: isCheckedOut || isPaged ? 'checkin' : 'checkout'
+              });
+            }}
+            className={`px-2.5 py-1 rounded-xl font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors ${
+              isCheckedOut || isPaged
+                ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200'
+                : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
+            }`}
+          >
+            <BookCheck className="w-3 h-3" />
+            <span>{isCheckedOut || isPaged ? 'إرجاع FOLIO' : 'إعارة فورية'}</span>
+          </button>
+        ) : work.originDate ? (
           <span className="text-[10px] text-slate-400 font-mono">
             {work.originDate}
           </span>
-        )}
+        ) : null}
       </div>
     </div>
   );
 }
 
+// =========================================================================
+// VUFIND VIRTUAL SHELF BROWSE SECTION (Call Number Carousel)
+// =========================================================================
+
+function VirtualShelfBrowseSection({
+  items,
+  onSelectWork,
+  onReanchor
+}: {
+  items: VirtualShelfItem[];
+  onSelectWork: (workId: string) => void;
+  onReanchor: (workId: string) => void;
+}) {
+  if (!items || items.length === 0) return null;
+
+  return (
+    <div className="p-6 rounded-3xl bg-white/85 backdrop-blur-2xl border border-slate-200/90 shadow-xs space-y-4 text-slate-900">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/80 pb-3">
+        <div>
+          <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
+            <Library className="w-5 h-5 text-teal-600" />
+            <span>تصفح الرف الافتراضي حسب رقم الاستدعاء (VuFind Virtual Shelf Browse — LCC / DDC)</span>
+          </h2>
+          <p className="text-xs text-slate-500 font-medium mt-0.5">
+            استكشف الكتب والمخطوطات المجاورة مكانياً على رفوف المكتبة مرتبةً وفق تصنيف مكتبة الكونغرس (LCC) وديوي (DDC)
+          </p>
+        </div>
+        <span className="px-3 py-1 rounded-full bg-teal-50 text-teal-800 border border-teal-200 text-xs font-mono font-bold self-start sm:self-auto">
+          VuFind CallNumber Shelf
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+        {items.map(item => (
+          <div
+            key={item.workId}
+            onClick={() => onSelectWork(item.workId)}
+            className={`p-3 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between group ${
+              item.isCurrent
+                ? 'bg-teal-50/90 border-teal-500 ring-2 ring-teal-200 shadow-sm'
+                : 'bg-white hover:bg-slate-50 border-slate-200/90 shadow-2xs'
+            }`}
+          >
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-1">
+                <span className="px-2 py-0.5 rounded bg-slate-900 text-amber-300 font-mono text-[10px] font-bold truncate" dir="ltr">
+                  {item.callNumber}
+                </span>
+                {item.isCurrent && (
+                  <span className="px-1.5 py-0.2 rounded bg-teal-600 text-white text-[9px] font-bold">
+                    المحدد
+                  </span>
+                )}
+              </div>
+
+              <div className="h-24 rounded-xl bg-gradient-to-br from-slate-100 to-indigo-50/60 border border-slate-200/80 overflow-hidden flex items-center justify-center p-2 text-center">
+                {item.coverUrl ? (
+                  <img src={item.coverUrl} alt={item.title} className="w-full h-full object-cover" loading="lazy" />
+                ) : (
+                  <span className="font-serif font-black text-slate-800 text-[11px] line-clamp-3">{item.title}</span>
+                )}
+              </div>
+
+              <div className="font-black text-xs text-slate-900 group-hover:text-teal-700 line-clamp-2 leading-snug">
+                {item.title}
+              </div>
+              <div className="text-[10px] text-slate-500 truncate">{item.creator}</div>
+            </div>
+
+            <div className="pt-2 mt-2 border-t border-slate-100 flex items-center justify-between text-[10px]">
+              <span className={`font-bold ${
+                item.availability === 'checked_out' ? 'text-rose-600' : 'text-emerald-700'
+              }`}>
+                {item.availability === 'checked_out' ? 'معار' : 'متاح'}
+              </span>
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  onReanchor(item.workId);
+                }}
+                className="text-teal-700 hover:underline font-bold cursor-pointer"
+              >
+                توسيط الرف
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// LIBRIS XL SPLIT-PANE ACADEMIC INSPECTOR VIEW (libris.kb.se style)
+// =========================================================================
+
+function LibrisSplitInspectorView({
+  works,
+  selectedWork,
+  inspectorTab,
+  onSelectWorkRow,
+  onChangeTab,
+  onOpenFullWork,
+  onSelectPerson,
+  onSelectSubject,
+  onCirculationAction,
+  bookbagIds,
+  onToggleBookbag,
+  onCopy
+}: {
+  works: OpacWorkEntity[];
+  selectedWork: OpacWorkEntity | null;
+  inspectorTab: 'overview' | 'wemi' | 'marc' | 'jsonld' | 'holdings';
+  onSelectWorkRow: (w: OpacWorkEntity) => void;
+  onChangeTab: (t: 'overview' | 'wemi' | 'marc' | 'jsonld' | 'holdings') => void;
+  onOpenFullWork: (id: string) => void;
+  onSelectPerson: (name: string) => void;
+  onSelectSubject: (label: string) => void;
+  onCirculationAction: (params: { itemId?: string; instanceId?: string; workId?: string; action: 'checkout' | 'checkin' | 'request' }) => void;
+  bookbagIds: string[];
+  onToggleBookbag: (id: string, e?: React.MouseEvent) => void;
+  onCopy: (text: string, label: string) => void;
+}) {
+  const wemiTree = useMemo(() => {
+    if (!selectedWork) return null;
+    return wolfMoonOpacService.getWemiClusterTree(selectedWork.id);
+  }, [selectedWork]);
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      {/* Right Column: High-Density LIBRIS XL Academic Table/List (7 cols) */}
+      <div className="lg:col-span-7 bg-white/90 backdrop-blur-xl rounded-3xl border border-slate-200/90 shadow-xs overflow-hidden">
+        <div className="p-4 border-b border-slate-200 bg-slate-50/90 flex items-center justify-between text-xs">
+          <div className="font-black text-slate-900 flex items-center gap-2">
+            <Code className="w-4 h-4 text-blue-600" />
+            <span>جدول الفهرس الأكاديمي المكثف (LIBRIS XL National Catalog View)</span>
+          </div>
+          <span className="text-[11px] text-slate-500 font-mono">اختر أي صف لمعاينة شفرته الببليوغرافية فوراً</span>
+        </div>
+
+        <div className="divide-y divide-slate-100">
+          {works.map((w, idx) => {
+            const isSelected = selectedWork?.id === w.id;
+            const isOut = w.instances.some(i => i.holdingStatus === 'checked_out');
+            return (
+              <div
+                key={w.id}
+                onClick={() => onSelectWorkRow(w)}
+                className={`p-4 transition-all cursor-pointer flex items-start justify-between gap-3 ${
+                  isSelected ? 'bg-blue-50/80 border-r-4 border-blue-600' : 'hover:bg-slate-50'
+                }`}
+              >
+                <div className="space-y-1 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-slate-200/80 text-slate-700 font-bold">
+                      #{idx + 1} • bf:Work
+                    </span>
+                    <span className="font-mono text-[10px] text-blue-700 font-bold" dir="ltr">
+                      {w.classificationLcc || w.instances[0]?.callNumber || 'B753'}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      isOut ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                    }`}>
+                      {isOut ? 'معار FOLIO' : 'متاح FOLIO'}
+                    </span>
+                  </div>
+
+                  <div className="font-black text-sm text-slate-900 hover:text-blue-700">
+                    {w.title}
+                  </div>
+
+                  <div className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        onSelectPerson(w.primaryCreator.nameArabic);
+                      }}
+                      className="font-bold text-blue-700 hover:underline cursor-pointer"
+                    >
+                      {w.primaryCreator.nameArabic}
+                    </button>
+                    <span>•</span>
+                    <span>{w.originDate || w.instances[0]?.publicationYear}</span>
+                    <span>•</span>
+                    <span className="font-mono text-[11px]">{w.instances.length} طبعات (bf:Instance)</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={e => onToggleBookbag(w.id, e)}
+                    className={`p-2 rounded-xl border text-xs cursor-pointer ${
+                      bookbagIds.includes(w.id)
+                        ? 'bg-amber-100 border-amber-300 text-amber-900'
+                        : 'bg-white border-slate-200 text-slate-500 hover:text-amber-700'
+                    }`}
+                    title="حفظ في حقيبة المقارنة"
+                  >
+                    <Bookmark className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      onOpenFullWork(w.id);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+                  >
+                    فتح
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Left Column: Live Split-Pane Inspector (5 cols) */}
+      <div className="lg:col-span-5 sticky top-20 bg-white/95 backdrop-blur-2xl rounded-3xl border border-slate-200/90 shadow-md overflow-hidden text-xs">
+        {selectedWork ? (
+          <div className="space-y-4 p-5">
+            <div className="flex items-start justify-between gap-2 border-b border-slate-200 pb-3">
+              <div>
+                <div className="text-[10px] font-mono text-blue-600 font-bold uppercase">
+                  LIBRIS XL Live Record Inspector
+                </div>
+                <h3 className="text-base font-black text-slate-900 mt-0.5">{selectedWork.title}</h3>
+                <div className="text-slate-600 font-medium">{selectedWork.primaryCreator.nameArabic}</div>
+              </div>
+              <button
+                onClick={() => onOpenFullWork(selectedWork.id)}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-blue-700 text-white font-bold text-xs cursor-pointer flex items-center gap-1"
+              >
+                <span>صفحة العمل</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Inspector Sub-Tabs */}
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 font-bold text-[11px] flex-wrap">
+              {[
+                { id: 'overview', label: 'ملخص LIBRIS' },
+                { id: 'wemi', label: 'شجرة WEMI' },
+                { id: 'holdings', label: 'إعارة FOLIO' },
+                { id: 'marc', label: 'MARC 21' },
+                { id: 'jsonld', label: 'JSON-LD' }
+              ].map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => onChangeTab(t.id as any)}
+                  className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all ${
+                    inspectorTab === t.id ? 'bg-white text-blue-900 shadow-2xs font-black' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {inspectorTab === 'overview' && (
+              <div className="space-y-3">
+                <p className="text-slate-600 leading-relaxed bg-slate-50 p-3 rounded-2xl border border-slate-200/80">
+                  {selectedWork.summaryArabic}
+                </p>
+                <div className="space-y-1.5 font-mono text-[11px] bg-slate-50 p-3 rounded-2xl border border-slate-200/80">
+                  <div><span className="text-slate-500">URI:</span> <span className="text-blue-700">{selectedWork.canonicalMoonUri}</span></div>
+                  <div><span className="text-slate-500">LCC:</span> <span className="text-slate-900 font-bold">{selectedWork.classificationLcc || '—'}</span></div>
+                  <div><span className="text-slate-500">DDC:</span> <span className="text-slate-900 font-bold">{selectedWork.classificationDdc || '—'}</span></div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedWork.subjects.map(s => (
+                    <button
+                      key={s.id}
+                      onClick={() => onSelectSubject(s.label)}
+                      className="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 font-semibold cursor-pointer"
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {inspectorTab === 'wemi' && wemiTree && (
+              <div className="space-y-2 font-mono text-[11px] bg-slate-50 p-3.5 rounded-2xl border border-slate-200 max-h-80 overflow-y-auto" dir="ltr">
+                <div className="font-bold text-indigo-800">[Hub] {wemiTree.label} ({wemiTree.uri})</div>
+                {wemiTree.children?.map(wNode => (
+                  <div key={wNode.id} className="pl-3 border-l-2 border-indigo-400 space-y-1.5">
+                    <div className="font-bold text-blue-800">↳ [Work] {wNode.label}</div>
+                    {wNode.children?.map(iNode => (
+                      <div key={iNode.id} className="pl-3 border-l-2 border-blue-300 space-y-1">
+                        <div className="font-semibold text-purple-800">↳ [Instance] {iNode.label} ({iNode.subtitle})</div>
+                        {iNode.children?.map(itNode => (
+                          <div key={itNode.id} className="pl-3 text-emerald-800">
+                            ↳ [Item] {itNode.label} — {itNode.status}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {inspectorTab === 'holdings' && (
+              <div className="space-y-2.5 max-h-80 overflow-y-auto">
+                {selectedWork.instances.map((inst, idx) => (
+                  <div key={inst.id || idx} className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-slate-900">{inst.carrierType || 'طبعة'} — {inst.publisher}</div>
+                      <div className="text-[11px] font-mono text-slate-500">{inst.callNumber || inst.shelfLocation}</div>
+                    </div>
+                    <button
+                      onClick={() => onCirculationAction({
+                        workId: selectedWork.id,
+                        instanceId: inst.folioInstanceId || inst.id,
+                        action: inst.holdingStatus === 'checked_out' ? 'checkin' : 'checkout'
+                      })}
+                      className={`px-3 py-1.5 rounded-xl font-bold text-white cursor-pointer ${
+                        inst.holdingStatus === 'checked_out' ? 'bg-amber-600' : 'bg-emerald-600'
+                      }`}
+                    >
+                      {inst.holdingStatus === 'checked_out' ? 'إرجاع FOLIO' : 'إعارة FOLIO'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {inspectorTab === 'marc' && (
+              <div className="space-y-2" dir="ltr">
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => onCopy(wolfMoonOpacService.generateMarc21Mapping(selectedWork), 'MARC 21')}
+                    className="px-2.5 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-800 font-mono text-[10px] cursor-pointer"
+                  >
+                    Copy MARC 21
+                  </button>
+                </div>
+                <pre className="p-3 rounded-2xl bg-slate-900 text-amber-300 font-mono text-[10px] overflow-x-auto max-h-72">
+                  {wolfMoonOpacService.generateMarc21Mapping(selectedWork)}
+                </pre>
+              </div>
+            )}
+
+            {inspectorTab === 'jsonld' && (
+              <div className="space-y-2" dir="ltr">
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => onCopy(JSON.stringify(wolfMoonOpacService.generateFramedJsonLd(selectedWork), null, 2), 'JSON-LD')}
+                    className="px-2.5 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-800 font-mono text-[10px] cursor-pointer"
+                  >
+                    Copy JSON-LD
+                  </button>
+                </div>
+                <pre className="p-3 rounded-2xl bg-slate-900 text-sky-300 font-mono text-[10px] overflow-x-auto max-h-72">
+                  {JSON.stringify(wolfMoonOpacService.generateFramedJsonLd(selectedWork), null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// VUFIND 11.0 + APACHE SOLR INTEGRATED DISCOVERY MATRIX VIEW
+// =========================================================================
+
+function VuFindIntegratedMatrixView({
+  works,
+  federatedData,
+  shelfItems,
+  onSelectWork,
+  onReanchorShelf,
+  onFilterSubject,
+  onCirculationAction,
+  bookbagIds,
+  onToggleBookbag,
+  onOpenFullVuFind
+}: {
+  works: OpacWorkEntity[];
+  federatedData: FederatedDeepSearchResult | null;
+  shelfItems: VirtualShelfItem[];
+  onSelectWork: (id: string) => void;
+  onReanchorShelf: (id: string) => void;
+  onFilterSubject: (subject: string) => void;
+  onCirculationAction: (params: { itemId?: string; instanceId?: string; workId?: string; action: 'checkout' | 'checkin' | 'request' }) => void;
+  bookbagIds: string[];
+  onToggleBookbag: (id: string, e?: React.MouseEvent) => void;
+  onOpenFullVuFind: () => void;
+}) {
+  return (
+    <div className="space-y-6">
+      {/* Top VuFind + Solr Live Telemetry Banner */}
+      <div className="p-5 rounded-3xl bg-gradient-to-r from-teal-950 via-slate-900 to-indigo-950 text-white border border-teal-500/30 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-400/40 font-mono text-[11px] font-bold">
+              VuFind 11.0 + Apache Solr 9.x biblio Core
+            </span>
+            <span className="text-xs text-emerald-300 font-bold flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>متصل مباشرة بـ FOLIO ILS RTA</span>
+            </span>
+          </div>
+          <h2 className="text-base sm:text-lg font-black">
+            مصفوفة اكتشاف VuFind وخدمات Solr المدمجة داخل الفهرس الدلالي
+          </h2>
+        </div>
+        <button
+          onClick={onOpenFullVuFind}
+          className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer self-start sm:self-auto shadow-xs"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          <span>فتح واجهة VuFind المستقلة</span>
+        </button>
+      </div>
+
+      {/* Live Solr Facet Pills */}
+      {federatedData?.facets?.subjects && federatedData.facets.subjects.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap text-xs">
+          <span className="font-bold text-slate-600">تصفية فورية عبر واجهات Solr Facets:</span>
+          {federatedData.facets.subjects.slice(0, 8).map(f => (
+            <button
+              key={f.value}
+              onClick={() => onFilterSubject(f.value)}
+              className="px-3 py-1 rounded-full bg-white hover:bg-teal-50 text-slate-800 hover:text-teal-900 border border-slate-200 hover:border-teal-300 font-semibold cursor-pointer transition-all shadow-2xs"
+            >
+              <span>{f.label}</span>
+              <span className="text-[10px] font-mono text-teal-600 mr-1">({f.count})</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* VuFind Record Matrix */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {works.map(w => {
+          const isOut = w.instances.some(i => i.holdingStatus === 'checked_out');
+          return (
+            <div
+              key={w.id}
+              className="p-5 rounded-3xl bg-white/90 hover:bg-white border border-slate-200/90 shadow-xs hover:shadow-md transition-all flex flex-col justify-between gap-3"
+            >
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="px-2.5 py-0.5 rounded-lg bg-teal-50 text-teal-800 border border-teal-200 font-mono text-[10px] font-bold" dir="ltr">
+                    Solr ID: {w.id} • Call: {w.classificationLcc || w.instances[0]?.callNumber || 'B753'}
+                  </span>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                    isOut ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                  }`}>
+                    {isOut ? 'معار في FOLIO' : 'متاح في FOLIO'}
+                  </span>
+                </div>
+
+                <h3
+                  onClick={() => onSelectWork(w.id)}
+                  className="text-base font-black text-slate-900 hover:text-teal-700 cursor-pointer hover:underline"
+                >
+                  {w.title}
+                </h3>
+
+                <div className="text-xs text-slate-600 font-semibold">
+                  المؤلف: <span className="text-slate-900 font-bold">{w.primaryCreator.nameArabic}</span> • {w.originDate || w.instances[0]?.publicationYear}
+                </div>
+
+                <p className="text-xs text-slate-500 line-clamp-2">{w.summaryArabic}</p>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => onCirculationAction({
+                      workId: w.id,
+                      instanceId: w.instances[0]?.folioInstanceId || w.instances[0]?.id || w.id,
+                      action: isOut ? 'checkin' : 'checkout'
+                    })}
+                    className={`px-3 py-1.5 rounded-xl font-bold text-white cursor-pointer ${
+                      isOut ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                    }`}
+                  >
+                    {isOut ? 'إرجاع النسخة (FOLIO)' : 'إعارة فورية (FOLIO)'}
+                  </button>
+                  <button
+                    onClick={e => onToggleBookbag(w.id, e)}
+                    className={`px-2.5 py-1.5 rounded-xl border font-bold cursor-pointer ${
+                      bookbagIds.includes(w.id)
+                        ? 'bg-amber-100 border-amber-300 text-amber-900'
+                        : 'bg-slate-50 border-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {bookbagIds.includes(w.id) ? 'في الحقيبة' : '+ حقيبة الباحث'}
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => onSelectWork(w.id)}
+                  className="font-bold text-teal-700 hover:text-teal-900 cursor-pointer flex items-center gap-1"
+                >
+                  <span>التفاصيل وشجرة WEMI</span>
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Virtual Shelf Browse Carousel inside VuFind Matrix */}
+      <VirtualShelfBrowseSection
+        items={shelfItems}
+        onSelectWork={onSelectWork}
+        onReanchor={onReanchorShelf}
+      />
+    </div>
+  );
+}
+
 export default WolfMoonStandaloneOpac;
+

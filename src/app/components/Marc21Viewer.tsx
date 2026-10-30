@@ -270,9 +270,15 @@ export function Marc21Viewer({ workData, instanceData, theme: BM, isLegacy }: Ma
         {/* Title Row */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-              style={{ background: "linear-gradient(135deg, #ef4444, #f97316)", boxShadow: "0 4px 16px rgba(239,68,68,0.25)" }}>
-              <Database className="h-5 w-5 text-white" />
+            <div className="w-11 h-11 flex items-center justify-center transition-all"
+              style={{
+                borderRadius: "120px",
+                background: "rgba(255, 255, 255, 0.21)",
+                backdropFilter: "blur(4.5px) blur(9px) saturate(1.5) brightness(1.1)",
+                WebkitBackdropFilter: "blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)",
+                boxShadow: "inset 0 0 0 1px rgba(255, 255, 255, 0.15), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.2), 0 8px 32px rgba(0, 0, 0, 0.35)",
+              }}>
+              <Database className="h-5 w-5 text-white drop-shadow-sm" />
             </div>
             <div>
               <h3 className="text-lg font-black flex items-center gap-2" style={{ color: BM.text }}>

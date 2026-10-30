@@ -1,8 +1,9 @@
 @echo off
-title Moon Editor
-cd /d "%~dp0"
-echo Starting Moon Editor...
-set "PATH=C:\Program Files\nodejs;%PATH%"
-start http://localhost:5173
-call npm.cmd run dev
+chcp 65001 >nul
+title Moon Library Suite - Master Launcher
+color 0B
+echo ===================================================================
+echo   Starting Moon Library Suite (Moon Wolf + FOLIO + VuFind)
+echo ===================================================================
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$script = Join-Path $PSScriptRoot 'start-suite.ps1'; if (-not (Test-Path $script)) { $script = Join-Path (Get-Location) 'start-suite.ps1' }; & $script"
 pause

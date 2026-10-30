@@ -36,60 +36,12 @@ const app = new Hono();
 // 🚀 BOOT SEQUENCE - Initialize Moon Engine with correct dependency order
 let bootComplete = false;
 
-// Create demo user for testing
-async function createDemoUserIfNeeded() {
-  try {
-    console.log('[BOOT] Creating demo user if needed...');
-    const adminSupabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-    );
-
-    // First check if demo user already exists
-    let demoExists = false;
-    try {
-      const { data: listData } = await adminSupabase.auth.admin.listUsers();
-      demoExists = listData?.users?.some((u: any) => u.email === 'demo@moon.local') ?? false;
-    } catch (_) {
-      // listUsers might fail, proceed with create attempt
-    }
-
-    if (demoExists) {
-      console.log('[BOOT] Demo user already exists');
-      return;
-    }
-    
-    // Try to create demo user
-    const { data, error } = await adminSupabase.auth.admin.createUser({
-      email: 'demo@moon.local',
-      password: 'demo123',
-      user_metadata: { username: 'demo' },
-      email_confirm: true
-    });
-    
-    if (error) {
-      if (error.message.includes('already') || error.message.includes('duplicate') || error.message.includes('exists')) {
-        console.log('[BOOT] Demo user already exists');
-      } else {
-        console.log('[BOOT] Could not create demo user:', error.message);
-      }
-    } else {
-      console.log('[BOOT] Demo user created successfully: username=demo, password=demo123');
-    }
-  } catch (error) {
-    console.log('[BOOT] Demo user creation skipped:', error);
-  }
-}
-
 async function bootMoonEngine() {
   console.log('='.repeat(60));
   console.log('🌙 MOON ENGINE BOOT SEQUENCE STARTING');
   console.log('='.repeat(60));
   
   try {
-    // 0️⃣ Create demo user
-    await createDemoUserIfNeeded();
-    
     // 1️⃣ Load Ontology Schema First
     console.log('[BOOT] Step 1: Loading BIBFRAME Ontology Schema...');
     await ontology.loadSchema();
@@ -117,7 +69,6 @@ async function bootMoonEngine() {
     
     console.log('='.repeat(60));
     console.log('🎉 MOON ENGINE READY - All systems operational');
-    console.log('💡 Demo login: username=demo, password=demo123');
     console.log('='.repeat(60));
     
   } catch (error) {
@@ -1014,37 +965,6 @@ app.post("/make-server-49c0e13c/login", async (c) => {
       email: email,
       password: password,
     });
-
-    // If login fails and this is the demo user, auto-provision the demo account and retry
-    if (error && username === 'demo' && password === 'demo123') {
-      console.log('[LOGIN] Demo user login failed, attempting to auto-provision demo account...');
-      try {
-        const adminClient = createClient(
-          Deno.env.get('SUPABASE_URL') ?? '',
-          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-        );
-        const { error: createError } = await adminClient.auth.admin.createUser({
-          email: 'demo@moon.local',
-          password: 'demo123',
-          user_metadata: { username: 'demo' },
-          email_confirm: true
-        });
-        if (createError) {
-          console.log('[LOGIN] Demo user provision result:', createError.message);
-        } else {
-          console.log('[LOGIN] Demo user provisioned successfully, retrying login...');
-        }
-        // Retry login regardless (user might already exist with different state)
-        const retryResult = await loginClient.auth.signInWithPassword({
-          email: email,
-          password: password,
-        });
-        data = retryResult.data;
-        error = retryResult.error;
-      } catch (provisionError) {
-        console.error('[LOGIN] Demo auto-provision failed:', provisionError);
-      }
-    }
 
     if (error) {
       console.error('Login error:', error);
@@ -3457,30 +3377,6 @@ app.post("/make-server-49c0e13c/moon/:entityType/:entityId/restore", async (c) =
   }
 });
 
-// Get audit logs (GET /moon/audit)
-app.get("/make-server-49c0e13c/moon/audit", async (c) => {
-  try {
-    const entityId = c.req.query('entityId');
-    const entityType = c.req.query('entityType') as 'record' | 'authority' | undefined;
-    const actor = c.req.query('actor');
-    const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!) : 50;
-    const offset = c.req.query('offset') ? parseInt(c.req.query('offset')!) : 0;
-
-    const logs = await versioning.getAuditLogs({
-      entityId,
-      entityType,
-      actor,
-      limit,
-      offset
-    });
-
-    return c.json({ logs, count: logs.length });
-  } catch (error) {
-    console.error('[MOON API] Get audit logs error:', error);
-    return c.json({ error: 'Failed to get audit logs' }, 500);
-  }
-});
-
 // 📐 SHACL VALIDATION ENDPOINTS
 
 // Get BIBFRAME SHACL shapes (GET /moon/shacl/shapes)
@@ -3939,116 +3835,6 @@ app.delete("/make-server-49c0e13c/test/cleanup",
   } catch (error) {
     console.error('[LOAD TEST] Cleanup error:', error);
     return c.json({ error: 'Cleanup failed' }, 500);
-  }
-});
-
-// 🎭 DEMO SETUP ENDPOINT (Development Only)
-// Creates demo institution and users for testing
-app.post("/make-server-49c0e13c/setup-demo", async (c) => {
-  try {
-    console.log('[DEMO SETUP] Creating demo environment...');
-    
-    // Check if demo institution already exists
-    const existingInst = await multiTenant.getInstitutionByCode('DEMO');
-    
-    if (existingInst) {
-      return c.json({ 
-        message: 'Demo environment already exists',
-        institution: existingInst,
-        note: 'Use existing user IDs: demo-admin, demo-cataloger, demo-viewer'
-      });
-    }
-
-    // Create demo institution
-    const institution = await multiTenant.createInstitution({
-      name: "Demo Library",
-      code: "DEMO",
-      baseUri: "https://demo.library.org",
-      settings: {
-        enableTripleStore: true,
-        enableSHACLValidation: true,
-        defaultLanguage: "en"
-      }
-    });
-
-    console.log(`[DEMO SETUP] Created institution: ${institution.id}`);
-
-    // Create admin user
-    const admin = await multiTenant.createUser({
-      email: "admin@demo.local",
-      name: "Demo Admin",
-      institutionId: institution.id,
-      roles: ['admin']
-    });
-
-    console.log(`[DEMO SETUP] Created admin user: ${admin.id}`);
-
-    // Create cataloger user
-    const cataloger = await multiTenant.createUser({
-      email: "cataloger@demo.local",
-      name: "Demo Cataloger",
-      institutionId: institution.id,
-      roles: ['cataloger']
-    });
-
-    console.log(`[DEMO SETUP] Created cataloger user: ${cataloger.id}`);
-
-    // Create viewer user
-    const viewer = await multiTenant.createUser({
-      email: "viewer@demo.local",
-      name: "Demo Viewer",
-      institutionId: institution.id,
-      roles: ['viewer']
-    });
-
-    console.log(`[DEMO SETUP] Created viewer user: ${viewer.id}`);
-
-    return c.json({
-      success: true,
-      message: 'Demo environment created successfully',
-      institution: {
-        id: institution.id,
-        name: institution.name,
-        code: institution.code
-      },
-      users: {
-        admin: {
-          id: admin.id,
-          email: admin.email,
-          roles: admin.roles,
-          permissions: admin.permissions,
-          usage: 'Full access - can create, edit, delete records and merge authorities'
-        },
-        cataloger: {
-          id: cataloger.id,
-          email: cataloger.email,
-          roles: cataloger.roles,
-          permissions: cataloger.permissions,
-          usage: 'Can create and edit records, but cannot delete or merge'
-        },
-        viewer: {
-          id: viewer.id,
-          email: viewer.email,
-          roles: viewer.roles,
-          permissions: viewer.permissions,
-          usage: 'Read-only access - can view but not modify records'
-        }
-      },
-      instructions: {
-        usage: 'Add X-User-ID header to requests',
-        examples: [
-          `curl -H "X-User-ID: ${admin.id}" https://PROJECT.supabase.co/functions/v1/make-server-49c0e13c/moon/records`,
-          `curl -H "X-User-ID: ${cataloger.id}" https://PROJECT.supabase.co/functions/v1/make-server-49c0e13c/moon/records`,
-          `curl -H "X-User-ID: ${viewer.id}" https://PROJECT.supabase.co/functions/v1/make-server-49c0e13c/moon/records`
-        ]
-      }
-    });
-  } catch (error) {
-    console.error('[DEMO SETUP] Error:', error);
-    return c.json({ 
-      error: 'Failed to create demo environment', 
-      details: error instanceof Error ? error.message : 'Unknown error' 
-    }, 500);
   }
 });
 

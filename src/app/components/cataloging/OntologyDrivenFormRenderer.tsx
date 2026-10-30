@@ -6,6 +6,7 @@
 import React, { useState, useRef } from 'react';
 import { ChevronDown, ChevronUp, Plus, X, Edit2, Link as LinkIcon, FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n/config';
 import { 
   getPropertiesByDomain, 
   getCategoriesForDomain, 
@@ -110,6 +111,88 @@ const PROPERTY_I18N_MAP: Record<string, string> = {
   'Item Of': 'ont.itemOf',
   'Instance Of': 'ont.instanceOf',
   'Publication': 'ont.provisionActivity',
+};
+
+
+const ARABIC_CATEGORY_FALLBACKS: Record<string, string> = {
+  'Title Information': 'بيانات العنوان والتسمية',
+  'Contributors': 'المؤلفون والمساهمون والمسؤولية',
+  'Subject Access': 'رؤوس الموضوعات والمداخل الاستنادية',
+  'Subject & Classification': 'الموضوعات والتصنيف',
+  'Classification Numbers': 'أرقام التصنيف (ديوي والكونغرس)',
+  'Language & Script': 'اللغات ونظم الكتابة',
+  'Language & Content': 'لغات الوعاء والمحتوى',
+  'Content Description': 'وصف المحتوى والشكل',
+  'Publication & Distribution': 'بيانات النشر والتوزيع والإصدار',
+  'Publication Information': 'بيانات النشر',
+  'Edition & Publication': 'الطبعة والنشر',
+  'Identifiers': 'المعرفات المعيارية والأرقام القياسية',
+  'Physical Description': 'الوصف المادي والامتداد',
+  'Series Area': 'منطقة السلسلة',
+  'Series Information': 'بيانات السلسلة',
+  'Notes & Annotations': 'الملاحظات والتبصرات',
+  'Holdings & Access': 'المقتنيات والإتاحة',
+  'Holdings': 'المقتنيات والنسخ',
+  'Electronic Access': 'الإتاحة الإلكترونية والروابط',
+  'Relationships': 'العلاقات الببليوغرافية',
+  'Administrative Metadata': 'البيانات الإدارية والاستناد',
+  'Academic Information': 'البيانات الأكاديمية والرسائل',
+  'Accessibility': 'إمكانية الوصول والخدمات الخاصة',
+  'Work Metadata': 'بيانات العمل المرجعية',
+  'Acquisition Information': 'بيانات التزويد والاقتناء',
+  'Dates': 'التواريخ والأزمنة',
+};
+
+
+const ARABIC_DESC_FALLBACKS: Record<string, string> = {
+  'Name given to a resource': 'اسم أو عنوان مصدر المعلومات',
+  'Agent and their role in relation to the resource': 'المسؤول الاستنادي ودوره بالنسبة للوعاء (مؤلف، محقق، مترجم...)',
+  'Classification number or code': 'رقم أو رمز التصنيف المخصص للوعاء',
+  'Language of the content': 'لغة المحتوى أو الوعاء المكتوب بها',
+  'Categorization reflecting the fundamental form of communication': 'شكل ونوع المحتوى (نص، صورة، تسجيل صوتي...)',
+  'Index term, subject term, or descriptor': 'رأس الموضوع الاستنادي أو الواصفة الموضوعية',
+};
+
+const ARABIC_PROPERTY_FALLBACKS: Record<string, string> = {
+  'Title': 'العنوان',
+  'Main Title': 'العنوان الرئيسي',
+  'Subtitle': 'العنوان الفرعي',
+  'Part Number': 'رقم الجزء',
+  'Part Name': 'اسم الجزء',
+  'Contribution': 'المساهمة',
+  'Agent': 'الاسم الاستنادي / الفاعل',
+  'Role': 'الدور الاستنادي',
+  'Subject': 'الموضوع',
+  'Genre/Form': 'الشكل / النوع الأدبي',
+  'Classification': 'التصنيف',
+  'Language': 'اللغة',
+  'Content Type': 'نوع المحتوى',
+  'Media Type': 'نوع الوسيط',
+  'Carrier Type': 'نوع الحامل',
+  'Summary': 'ملخص المحتوى',
+  'Note': 'الملاحظة والتبصرة',
+  'Provision Activity': 'بيانات النشر والإنتاج',
+  'Identifier': 'المعرف القياسي',
+  'Extent': 'الامتداد وعدد الصفحات',
+  'Dimensions': 'الأبعاد والقياسات',
+  'Mode of Issuance': 'طريقة الإصدار',
+  'Statement of Responsibility': 'بيان المسؤولية (المؤلفون والمحققون)',
+  'Edition Statement': 'بيان الطبعة',
+  'Origin Place': 'مكان المنشأ / النشر',
+  'Origin Date': 'تاريخ المنشأ / النشر',
+  'Intended Audience': 'الجمهور المستهدف',
+  'Table of Contents': 'قائمة المحتويات والفهارس',
+  'Illustrative Content': 'المحتوى الإيضاحي والصور',
+  'Supplementary Content': 'المواد الإضافية والملحقات',
+  'Issuing Body': 'الجهة المصدرة',
+  'Dissertation': 'الأطروحة والرسالة الجامعية',
+  'Degree': 'الدرجة العلمية',
+  'Granting Institution': 'الجامعة المانحة',
+  'Year': 'السنة',
+  'Electronic Location': 'الرابط الإلكتروني',
+  'Item Of': 'نسخة من التجسيدة',
+  'Instance Of': 'تجسيدة للعمل',
+  'Publication': 'النشر والتوزيع',
 };
 
 // Helper to translate a label with i18n fallback
@@ -418,6 +501,8 @@ function CategorySection({
   if (properties.length === 0) return null;
 
   const translateCategory = useTranslatedCategory();
+  const { i18n: i18nInstance } = useTranslation();
+  const currentLang = i18nInstance?.language || i18n.language;
   const { textColor, textDimColor } = useFormTheme();
 
   return (
@@ -435,8 +520,8 @@ function CategorySection({
         <div className="text-start">
           <h3 className="text-lg font-bold" style={{ color: textColor }}>{translateCategory(category)}</h3>
           <p className="text-sm mt-1" style={{ color: textDimColor }}>
-            {properties.length} properties
-            {requiredCount > 0 && ` • ${requiredCount} required`}
+            {properties.length} {i18n.language === 'ar' ? 'خاصية' : 'properties'}
+            {requiredCount > 0 && ` • ${requiredCount} ${i18n.language === 'ar' ? 'مطلوب' : 'required'}`}
           </p>
         </div>
         {expanded ? (
@@ -568,7 +653,7 @@ function SinglePropertyRenderer({
           isLight={isLight}
         />
         {property.description && (
-          <p className="text-xs" style={{ color: textDimColor }}>{property.description}</p>
+          <p className="text-xs" style={{ color: textDimColor }}>{i18n.language === 'ar' ? (ARABIC_DESC_FALLBACKS[property.description] || property.description) : property.description}</p>
         )}
         {value && typeof value === 'object' && value.uri && (
           <div className="flex items-center gap-1 text-xs" style={{ color: isLight ? "rgba(30,80,180,0.85)" : "#93c5fd" }}>
@@ -983,7 +1068,7 @@ function RepeatablePropertyRenderer({
         <label className="block text-sm font-semibold" style={{ color: textColor }}>
           {translateLabel(property.label)}
           {property.required && <span className="ml-1 text-red-500">*</span>}
-          <span className="text-xs ml-2" style={{ color: textDimColor }}>(Repeatable)</span>
+          <span className="text-xs ml-2" style={{ color: textDimColor }}>{i18n.language === 'ar' ? '(متكرر)' : '(Repeatable)'}</span>
         </label>
         <button
           onClick={addValue}
@@ -1001,7 +1086,7 @@ function RepeatablePropertyRenderer({
       </div>
 
       {values.length === 0 && (
-        <div className="text-xs italic py-2" style={{ color: textDimColor }}>No values added yet</div>
+        <div className="text-xs italic py-2" style={{ color: textDimColor }}>{i18n.language === 'ar' ? 'لم تتم إضافة قيم بعد' : 'No values added yet'}</div>
       )}
 
       {values.map((val, index) => (
@@ -1093,7 +1178,7 @@ function BlankNodePropertyRenderer({
             }}
           >
             <Edit2 className="w-3.5 h-3.5" />
-            <span>Title Details / Subtitle</span>
+            <span>{i18n.language === 'ar' ? 'تفاصيل العنوان / العنوان الفرعي' : 'Title Details / Subtitle'}</span>
           </button>
         </div>
 
@@ -1156,7 +1241,7 @@ function BlankNodePropertyRenderer({
             }}
           >
             <Edit2 className="w-3.5 h-3.5" />
-            <span>Scheme & Details</span>
+            <span>{i18n.language === 'ar' ? 'خطة التصنيف والتفاصيل' : 'Scheme & Details'}</span>
           </button>
         </div>
 
@@ -1276,7 +1361,7 @@ function BlankNodePropertyRenderer({
             }}
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Add / Edit Contributors</span>
+            <span>{i18n.language === 'ar' ? 'إضافة / تعديل المساهمين' : 'Add / Edit Contributors'}</span>
           </button>
         </div>
 
@@ -1292,7 +1377,7 @@ function BlankNodePropertyRenderer({
               color: textDimColor,
             }}
           >
-            <span className="text-sm">+ Add Contributor (Author, Editor, etc.)</span>
+            <span className="text-sm">{i18n.language === 'ar' ? '+ إضافة مساهم (مؤلف، محقق، مترجم...)' : '+ Add Contributor (Author, Editor, etc.)'}</span>
             <Edit2 className="w-4 h-4 opacity-50" />
           </button>
         ) : (

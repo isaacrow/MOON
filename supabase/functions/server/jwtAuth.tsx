@@ -1,14 +1,9 @@
 /**
  * 🔐 PRODUCTION JWT AUTHENTICATION
- * Replaces X-User-ID header with real token validation
+ * Validates Supabase Auth tokens for protected endpoints.
  * 
- * Supports:
- * - Supabase Auth JWT tokens
- * - Custom JWT tokens
- * - Token signature verification
- * - Expiration enforcement
- * - Role claims extraction
- * - Refresh token handling
+ * Accepts Supabase Auth tokens only and resolves user permissions from the
+ * server-side MOON user store.
  */
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -57,12 +52,6 @@ export async function extractAndValidateJWT(c: Context): Promise<{
     const supabaseResult = await validateSupabaseToken(token);
     if (supabaseResult.valid) {
       return supabaseResult;
-    }
-
-    // Fallback to custom JWT validation
-    const customResult = await validateCustomJWT(token);
-    if (customResult.valid) {
-      return customResult;
     }
 
     return { valid: false, error: 'Invalid or expired token' };
@@ -124,54 +113,8 @@ async function validateSupabaseToken(token: string): Promise<{
 }
 
 /**
- * 🔑 VALIDATE CUSTOM JWT
- * For non-Supabase JWT tokens
- */
-async function validateCustomJWT(token: string): Promise<{
-  valid: boolean;
-  payload?: JWTPayload;
-  error?: string;
-}> {
-  try {
-    // JWT structure: header.payload.signature
-    const parts = token.split('.');
-    if (parts.length !== 3) {
-      return { valid: false, error: 'Invalid JWT format' };
-    }
-
-    // Decode payload (base64url)
-    const payloadBase64 = parts[1];
-    const payloadJson = atob(payloadBase64.replace(/-/g, '+').replace(/_/g, '/'));
-    const payload = JSON.parse(payloadJson) as JWTPayload;
-
-    // Check expiration
-    if (payload.exp) {
-      const now = Math.floor(Date.now() / 1000);
-      if (now > payload.exp) {
-        return { valid: false, error: 'Token expired' };
-      }
-    }
-
-    // TODO: Verify signature with JWT_SECRET
-    // For now, we trust the token if it's well-formed and not expired
-    // In production, you MUST verify the signature:
-    //
-    // const jwtSecret = Deno.env.get('JWT_SECRET');
-    // const isValid = await verifySignature(token, jwtSecret);
-    // if (!isValid) return { valid: false, error: 'Invalid signature' };
-
-    console.warn('[JWT] ⚠️ Custom JWT signature verification not implemented. Token accepted without signature check.');
-
-    return { valid: true, payload };
-  } catch (error) {
-    console.error('[JWT] Custom JWT validation error:', error);
-    return { valid: false, error: 'Invalid JWT' };
-  }
-}
-
-/**
  * 🔐 PRODUCTION AUTHENTICATION MIDDLEWARE
- * Replaces the X-User-ID development middleware
+ * Validates Supabase Auth tokens for protected endpoints.
  */
 export async function requireJWTAuth(c: Context, next: () => Promise<void>) {
   try {
@@ -206,39 +149,10 @@ export async function requireJWTAuth(c: Context, next: () => Promise<void>) {
       return;
     }
 
-    // Fallback to X-User-ID for development/testing
-    const devUserId = c.req.header('X-User-ID');
-    
-    if (devUserId) {
-      console.warn(`[JWT AUTH] ⚠️ Using development X-User-ID header. This should not be used in production.`);
-      
-      const user = await multiTenant.getUser(devUserId);
-      
-      if (!user) {
-        return c.json({ 
-          error: 'Unauthorized', 
-          message: 'Invalid X-User-ID' 
-        }, 401);
-      }
-
-      (c as any).user = {
-        id: user.id,
-        email: user.email,
-        institutionId: user.institutionId,
-        roles: user.roles,
-        permissions: user.permissions
-      };
-
-      await next();
-      return;
-    }
-
     // No valid authentication method found
     return c.json({ 
       error: 'Unauthorized',
-      message: 'Missing or invalid authentication. Provide either:\n' +
-               '1. Authorization: Bearer <jwt-token> (production)\n' +
-               '2. X-User-ID: <user-id> (development only)',
+      message: 'Missing or invalid Supabase bearer token.',
       jwtError: jwtResult.error
     }, 401);
 

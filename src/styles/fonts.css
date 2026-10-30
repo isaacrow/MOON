@@ -1,3 +1,31 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Tajawal:wght@300;400;500;700;800;900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700;800;900&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800&display=swap');
+
+/* Set Cairo as the primary font for Arabic */
+:lang(ar),
+[dir="rtl"],
+[dir="rtl"] body,
+html[dir="rtl"],
+html[lang="ar"],
+.arabic-font {
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', 'Tajawal', system-ui, -apple-system, sans-serif !important;
+}
+
+[dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+}
+
+[dir="rtl"] input,
+[dir="rtl"] textarea,
+[dir="rtl"] select {
+  direction: rtl;
+  text-align: right;
+}
+
+[dir="rtl"] input::placeholder,
+[dir="rtl"] textarea::placeholder {
+  direction: rtl;
+  text-align: right;
+}

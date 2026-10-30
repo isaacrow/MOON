@@ -278,7 +278,7 @@ export function AuthoritySelect({
           {/* Results Dropdown — rendered via portal to escape overflow clipping */}
           {isOpen && results.length > 0 && dropdownPos && createPortal(
             <>
-              <div className="fixed inset-0" style={{ zIndex: 99998 }} onClick={() => setIsOpen(false)} />
+              <div className="fixed inset-0" style={{ zIndex: 1000001 }} onClick={() => setIsOpen(false)} />
               <div
                 ref={dropdownRef}
                 className="rounded-xl max-h-80 overflow-y-auto"
@@ -292,7 +292,7 @@ export function AuthoritySelect({
                   WebkitBackdropFilter: "blur(40px) saturate(180%)",
                   border: "1px solid rgba(0,0,0,0.12)",
                   boxShadow: "0 12px 48px rgba(0,0,0,0.25), 0 4px 12px rgba(0,0,0,0.1)",
-                  zIndex: 99999,
+                  zIndex: 1000002,
                 }}
               >
                 {results.map((result, index) => (
@@ -335,7 +335,7 @@ export function AuthoritySelect({
           {/* No Results — rendered via portal */}
           {isOpen && !loading && query.length >= 2 && results.length === 0 && dropdownPos && createPortal(
             <>
-              <div className="fixed inset-0" style={{ zIndex: 99998 }} onClick={() => setIsOpen(false)} />
+              <div className="fixed inset-0" style={{ zIndex: 1000001 }} onClick={() => setIsOpen(false)} />
               <div
                 className="rounded-xl p-4 text-center"
                 style={{
@@ -349,7 +349,7 @@ export function AuthoritySelect({
                   border: "1px solid rgba(0,0,0,0.12)",
                   boxShadow: "0 12px 48px rgba(0,0,0,0.25), 0 4px 12px rgba(0,0,0,0.1)",
                   color: "rgba(0,0,0,0.5)",
-                  zIndex: 99999,
+                  zIndex: 1000002,
                 }}
               >
                 {t('editor.noAuthoritiesFound')} "{query}"

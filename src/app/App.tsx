@@ -44,6 +44,7 @@ const SinopiaResources = React.lazy(() => import('./components/SinopiaResources'
 const ActionsMenu = React.lazy(() => import('./components/ActionsMenu').then(m => ({ default: m.ActionsMenu })));
 const FOLIOModuleBrowser = React.lazy(() => import('./components/FOLIOModuleBrowser').then(m => ({ default: m.FOLIOModuleBrowser })));
 const FOLIOIntegration = React.lazy(() => import('./components/FOLIOIntegration').then(m => ({ default: m.FOLIOIntegration })));
+const VuFindIntegration = React.lazy(() => import('./components/VuFindIntegration').then(m => ({ default: m.VuFindIntegration })));
 const MoonEngineThemed = React.lazy(() => import('./components/MoonEngineThemed').then(m => ({ default: m.MoonEngineThemed })));
 const MoonEngineGlass = React.lazy(() => import('./components/MoonEngineGlass').then(m => ({ default: m.MoonEngineGlass })));
 const Classic1 = React.lazy(() => import('./components/Classic1').then(m => ({ default: m.Classic1 })));
@@ -90,7 +91,7 @@ const MoonNexus = React.lazy(() => import('./components/MoonNexus'));
 const MoonAIOrchestrator = React.lazy(() => import('./components/MoonAIOrchestrator'));
 const MoonDijlaCore = React.lazy(() => import('./components/MoonDijlaCore'));
 
-type ViewMode = 'dashboard' | 'type-selector' | 'catalog' | 'search' | 'bibframe-search' | 'opac' | 'advanced-search' | 'bulk-edit' | 'settings' | 'activity-log' | 'jcricket-dashboard' | 'review-workflow' | 'entity-event-log' | 'language-preferences' | 'ontology-browser' | 'authority-manager' | 'mind-map' | 'all-records' | 'ontology-driven-catalog' | 'api-examples' | 'template-manager' | 'template-editor' | 'resources' | 'actions-menu' | 'folio-browser' | 'folio-integration' | 'moon-engine' | 'classic-1' | 'theme-showcase' | 'moon-linked-data-engine' | 'moon-opac' | 'upgrade-status' | 'moon-authority-manager' | 'sparql-interface' | 'enterprise-status' | 'moon-oshin' | 'moon-sand' | 'moon-sand-v2' | 'moon-sand-persistent' | 'records-dashboard' | 'moon-wave-101' | 'moon-wave-diagnostic' | 'moon-faleh' | 'moon-dijla' | 'moon-k' | 'moon-bibframe-template' | 'moon-testing' | 'sun-moon' | 'blue-moon' | 'wolf-moon' | 'wolf-moon-opac' | 'moon-27' | 'moon-27-dashboard' | 'moon-27-studio' | 'linked-data-discovery' | 'bibframe2marc' | 'marc2bibframe' | 'enterprise-ai' | 'moon-ai' | 'dijla-platform' | 'ld4-platform' | 'moon-nexus' | 'moon-ai-orchestrator' | 'moon-dijla-core' | 'author-finder';
+type ViewMode = 'dashboard' | 'type-selector' | 'catalog' | 'search' | 'bibframe-search' | 'opac' | 'advanced-search' | 'bulk-edit' | 'settings' | 'activity-log' | 'jcricket-dashboard' | 'review-workflow' | 'entity-event-log' | 'language-preferences' | 'ontology-browser' | 'authority-manager' | 'mind-map' | 'all-records' | 'ontology-driven-catalog' | 'api-examples' | 'template-manager' | 'template-editor' | 'resources' | 'actions-menu' | 'folio-browser' | 'folio-integration' | 'vufind-integration' | 'moon-engine' | 'classic-1' | 'theme-showcase' | 'moon-linked-data-engine' | 'moon-opac' | 'upgrade-status' | 'moon-authority-manager' | 'sparql-interface' | 'enterprise-status' | 'moon-oshin' | 'moon-sand' | 'moon-sand-v2' | 'moon-sand-persistent' | 'records-dashboard' | 'moon-wave-101' | 'moon-wave-diagnostic' | 'moon-faleh' | 'moon-dijla' | 'moon-k' | 'moon-bibframe-template' | 'moon-testing' | 'sun-moon' | 'blue-moon' | 'wolf-moon' | 'wolf-moon-opac' | 'moon-27' | 'moon-27-dashboard' | 'moon-27-studio' | 'linked-data-discovery' | 'bibframe2marc' | 'marc2bibframe' | 'enterprise-ai' | 'moon-ai' | 'dijla-platform' | 'ld4-platform' | 'moon-nexus' | 'moon-ai-orchestrator' | 'moon-dijla-core' | 'author-finder';
 
 function CatalogApp() {
   const { t, i18n } = useTranslation();
@@ -115,45 +116,19 @@ function CatalogApp() {
   const [showOpacViewer, setShowOpacViewer] = useState(false);
   const [arabicExamplesLoaded, setArabicExamplesLoaded] = useState(false);
   
-  // Default to the comprehensive 100% Al-Qabasat BIBFRAME record
-  const defaultFullRecord = realLocExamples[0]?.data;
-  const initialWorkId = defaultFullRecord?.work?.['@id'] || `http://example.org/work/${Date.now()}`;
-  
-  const [work, setWork] = useState<Partial<BIBFRAMEWork>>(
-    (defaultFullRecord?.work as Partial<BIBFRAMEWork>) || {
-      '@type': 'bf:Work',
-      '@id': initialWorkId,
-    }
-  );
+  // Fresh, clean BIBFRAME record with no pre-entered data
+  const [work, setWork] = useState<Partial<BIBFRAMEWork>>(() => ({
+    '@type': 'bf:Work',
+    '@id': `http://example.org/work/${Date.now()}`,
+  }));
 
-  const [instance, setInstance] = useState<Partial<BIBFRAMEInstance>>(
-    (defaultFullRecord?.instance as Partial<BIBFRAMEInstance>) || {
-      '@type': 'bf:Instance',
-      '@id': `http://example.org/instance/${Date.now()}`,
-      'bf:instanceOf': {
-        '@id': initialWorkId,
-      },
-    }
-  );
+  const [instance, setInstance] = useState<Partial<BIBFRAMEInstance>>(() => ({
+    '@type': 'bf:Instance',
+    '@id': `http://example.org/instance/${Date.now()}`,
+  }));
 
-  // Current record for editors that need a single record object
-  const [currentRecord, setCurrentRecord] = useState<BIBFRAMERecord | null>(() => {
-    if (defaultFullRecord?.work && defaultFullRecord?.instance) {
-      return {
-        '@context': 'http://bibfra.me/vocab/lite/',
-        '@type': 'Work',
-        work: defaultFullRecord.work as BIBFRAMEWork,
-        instance: defaultFullRecord.instance as BIBFRAMEInstance,
-        metadata: {
-          createdDate: new Date().toISOString(),
-          catalogingLanguage: 'ara',
-          descriptionConventions: 'rda',
-          resourceType: 'Manuscript / مخطوط',
-        }
-      };
-    }
-    return null;
-  });
+  // Current record starts null (fresh draft)
+  const [currentRecord, setCurrentRecord] = useState<BIBFRAMERecord | null>(null);
 
   // Dark mode is now handled by ThemeContext
 
@@ -518,8 +493,21 @@ function CatalogApp() {
   };
 
   const handleNewRecord = () => {
-    handleReset();
-    setViewMode('type-selector');
+    const newWorkId = `http://example.org/work/${Date.now()}`;
+    const newInstanceId = `http://example.org/instance/${Date.now()}`;
+    setWork({
+      '@type': 'bf:Work',
+      '@id': newWorkId,
+    });
+    setInstance({
+      '@type': 'bf:Instance',
+      '@id': newInstanceId,
+      'bf:instanceOf': {
+        '@id': newWorkId,
+      },
+    });
+    setCurrentRecord(null);
+    setViewMode('wolf-moon');
   };
 
   const handleSaveRecord = async (record: BIBFRAMERecord) => {
@@ -1415,6 +1403,30 @@ function CatalogApp() {
     );
   }
 
+  // VuFind Live Integration
+  if (viewMode === 'vufind-integration') {
+    return (
+      <div className={darkMode ? 'dark' : ''}>
+        <div className="min-h-screen bg-background">
+          <TopNavBar
+            onDashboard={() => setViewMode('dashboard')}
+            onNewRecord={handleNewRecord}
+            darkMode={darkMode}
+            onToggleDarkMode={() => setDarkMode(!darkMode)}
+          />
+          <VuFindIntegration
+            onBack={() => setViewMode('dashboard')}
+            currentRecord={currentRecord}
+            onRecordImport={(record) => {
+              setCurrentRecord(record);
+              setViewMode('wolf-moon');
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   // FOLIO Module Browser
   if (viewMode === 'folio-browser') {
     return (
@@ -1665,10 +1677,21 @@ function AppContent({
 }
 
 export default function App() {
-  const [language, setLanguage] = useState('en');
+  const [language, setLanguage] = useState(() => {
+    try {
+      const saved = localStorage.getItem('moon-language');
+      return saved === 'en' ? 'en' : 'ar';
+    } catch {
+      return 'ar';
+    }
+  });
 
   useEffect(() => {
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
+    document.documentElement.lang = language;
+    try {
+      localStorage.setItem('moon-language', language);
+    } catch {}
   }, [language]);
 
   return (

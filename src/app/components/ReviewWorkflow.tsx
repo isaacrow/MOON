@@ -42,7 +42,7 @@ export function ReviewWorkflow({ onClose }: ReviewWorkflowProps) {
     try {
       const endpoint = item.operationType === 'merge' ? 'merge' : 'split';
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/${endpoint}/${item.operationId}`,
+        `/api/jcricket/${endpoint}/${item.operationId}`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken || publicAnonKey}`,
@@ -67,7 +67,7 @@ export function ReviewWorkflow({ onClose }: ReviewWorkflowProps) {
     try {
       const endpoint = selectedItem.operationType === 'merge' ? 'merge' : 'split';
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/${endpoint}/${selectedItem.operationId}/approve`,
+        `/api/jcricket/${endpoint}/${selectedItem.operationId}/approve`,
         {
           method: 'POST',
           headers: {
@@ -111,7 +111,7 @@ export function ReviewWorkflow({ onClose }: ReviewWorkflowProps) {
     try {
       const endpoint = selectedItem.operationType === 'merge' ? 'merge' : 'split';
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c/jcricket/${endpoint}/${selectedItem.operationId}/reject`,
+        `/api/jcricket/${endpoint}/${selectedItem.operationId}/reject`,
         {
           method: 'POST',
           headers: {

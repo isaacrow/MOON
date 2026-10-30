@@ -59,13 +59,31 @@ const mockLCGFT: AuthorityLookupResult[] = [
   { uri: 'http://id.loc.gov/authorities/genreForms/gf2011026387', label: 'Nonfiction', type: 'bf:GenreForm', source: 'LCGFT' },
 ];
 
-// Simulate network delay
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+async function fetchLocSuggest(subpath: string, query: string, defaultType: string, source: string): Promise<AuthorityLookupResult[]> {
+  try {
+    const url = `https://id.loc.gov/authorities/${subpath}/suggest/?q=${encodeURIComponent(query)}&count=15`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data[1] && data[3]) {
+        return data[1].map((label: string, i: number) => ({
+          uri: data[3][i] || `http://id.loc.gov/authorities/${subpath}/${encodeURIComponent(label)}`,
+          label,
+          type: defaultType,
+          source,
+        }));
+      }
+    }
+  } catch (err) {
+    // Graceful fallback to local cache
+  }
+  return [];
+}
 
 export async function searchLCNAF(query: string): Promise<AuthorityLookupResult[]> {
-  await delay(300); // Simulate API latency
-  if (!query || query.length < 2) return [];
-  
+  if (!query || query.trim().length < 2) return [];
+  const liveResults = await fetchLocSuggest('names', query.trim(), 'bf:Person', 'LCNAF');
+  if (liveResults.length > 0) return liveResults;
   const lowerQuery = query.toLowerCase();
   return mockLCNAF.filter(item => 
     item.label.toLowerCase().includes(lowerQuery)
@@ -73,9 +91,9 @@ export async function searchLCNAF(query: string): Promise<AuthorityLookupResult[
 }
 
 export async function searchLCSH(query: string): Promise<AuthorityLookupResult[]> {
-  await delay(300);
-  if (!query || query.length < 2) return [];
-  
+  if (!query || query.trim().length < 2) return [];
+  const liveResults = await fetchLocSuggest('subjects', query.trim(), 'bf:Topic', 'LCSH');
+  if (liveResults.length > 0) return liveResults;
   const lowerQuery = query.toLowerCase();
   return [...mockLCSH, ...mockGeographic].filter(item => 
     item.label.toLowerCase().includes(lowerQuery)
@@ -83,9 +101,9 @@ export async function searchLCSH(query: string): Promise<AuthorityLookupResult[]
 }
 
 export async function searchLCGFT(query: string): Promise<AuthorityLookupResult[]> {
-  await delay(300);
-  if (!query || query.length < 2) return [];
-  
+  if (!query || query.trim().length < 2) return [];
+  const liveResults = await fetchLocSuggest('genreForms', query.trim(), 'bf:GenreForm', 'LCGFT');
+  if (liveResults.length > 0) return liveResults;
   const lowerQuery = query.toLowerCase();
   return mockLCGFT.filter(item => 
     item.label.toLowerCase().includes(lowerQuery)
@@ -192,9 +210,9 @@ export const supplementaryContent = [
 
 // Search function for Publishers
 export async function searchPublishers(query: string): Promise<AuthorityLookupResult[]> {
-  await delay(300);
-  if (!query || query.length < 2) return [];
-  
+  if (!query || query.trim().length < 2) return [];
+  const liveResults = await fetchLocSuggest('names', query.trim(), 'bf:Organization', 'LCNAF');
+  if (liveResults.length > 0) return liveResults;
   const lowerQuery = query.toLowerCase();
   return mockPublishers.filter(item => 
     item.label.toLowerCase().includes(lowerQuery)
@@ -203,9 +221,9 @@ export async function searchPublishers(query: string): Promise<AuthorityLookupRe
 
 // Search function for Places
 export async function searchPlaces(query: string): Promise<AuthorityLookupResult[]> {
-  await delay(300);
-  if (!query || query.length < 2) return [];
-  
+  if (!query || query.trim().length < 2) return [];
+  const liveResults = await fetchLocSuggest('names', query.trim(), 'bf:Place', 'LCNAF');
+  if (liveResults.length > 0) return liveResults;
   const lowerQuery = query.toLowerCase();
   return mockGeographic.filter(item => 
     item.label.toLowerCase().includes(lowerQuery)

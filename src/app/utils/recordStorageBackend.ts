@@ -24,6 +24,9 @@ export interface SavedRecord {
   cataloger?: string;
   resourceType?: string;
   coverImage?: string;
+  status?: 'complete' | 'pending-review' | 'needs-review';
+  approvedBy?: string;
+  approvedAt?: string;
   jcricket?: {
     provenanceId?: string;
     institutionCode?: string;
@@ -36,7 +39,7 @@ export interface SavedRecord {
   };
 }
 
-const API_BASE = `https://${projectId}.supabase.co/functions/v1/make-server-49c0e13c`;
+const API_BASE = typeof window !== 'undefined' ? '/api' : 'http://localhost:8080';
 
 // Get access token from localStorage
 function getAccessToken(): string | null {
@@ -499,18 +502,32 @@ export async function getAllRecords(): Promise<SavedRecord[]> {
       };
     });
     
-    // Also cache to localStorage
+    // Merge with seed examples and local records so nothing is ever lost
+    const seedRecords = getSeedExamples();
+    const localRecords = getAllRecordsLocal();
+    const recordMap = new Map<string, SavedRecord>();
+
+    seedRecords.forEach(r => recordMap.set(r.id, r));
+    localRecords.forEach(r => recordMap.set(r.id, r));
+    convertedRecords.forEach(r => recordMap.set(r.id, r));
+
+    const finalRecords = Array.from(recordMap.values());
+    finalRecords.sort((a, b) => {
+      const dateA = new Date(a.modifiedAt || a.createdAt || 0).getTime();
+      const dateB = new Date(b.modifiedAt || b.createdAt || 0).getTime();
+      return dateB - dateA;
+    });
+
     try {
-      localStorage.setItem('bibframe_saved_records', JSON.stringify(convertedRecords));
+      localStorage.setItem('bibframe_saved_records', JSON.stringify(finalRecords));
     } catch (e) {
       console.error('Error caching to localStorage:', e);
     }
     
-    console.log(`✅ Loaded ${convertedRecords.length} records from Supabase`);
-    return convertedRecords;
+    console.log(`✅ Loaded ${finalRecords.length} total records (${convertedRecords.length} from Supabase, ${seedRecords.length} seeds)`);
+    return finalRecords;
   } catch (error) {
     console.error('Error fetching records from Supabase, falling back to localStorage:', error);
-    // Fallback to localStorage
     return getAllRecordsLocal();
   }
 }
@@ -542,86 +559,46 @@ function getSeedExamples(): SavedRecord[] {
   }));
 }
 
-function getAllRecordsLocal(): SavedRecord[] {
-  const stored = localStorage.getItem('bibframe_saved_records');
-  if (!stored) {
-    const seeded = getSeedExamples();
-    try {
-      localStorage.setItem('bibframe_saved_records', JSON.stringify(seeded));
-    } catch {}
-    return seeded;
-  }
-  try {
-    const records = JSON.parse(stored);
-    if (!Array.isArray(records) || records.length === 0) {
-      const seeded = getSeedExamples();
-      try {
-        localStorage.setItem('bibframe_saved_records', JSON.stringify(seeded));
-      } catch {}
-      return seeded;
-    }
-    
-    // Ensure al-qabasat is present and upgraded to the full 100% comprehensive record
-    const qabasatExample = getSeedExamples().find(e => e.id === 'al-qabasat-mir-damad');
-    const qabasatIndex = records.findIndex((r: any) => r.id === 'al-qabasat-mir-damad');
-    if (qabasatIndex === -1 && qabasatExample) {
-      records.unshift(qabasatExample);
-      try {
-        localStorage.setItem('bibframe_saved_records', JSON.stringify(records));
-      } catch {}
-    } else if (qabasatIndex !== -1 && qabasatExample) {
-      // Always ensure the comprehensive 100% record is up-to-date in cache
-      const existing = records[qabasatIndex];
-      const isOutdated = !existing.record?.work?.['bf:tableOfContents'] || !existing.record?.instance?.['bf:dimensions'];
-      if (isOutdated) {
-        records[qabasatIndex] = qabasatExample;
-        try {
-          localStorage.setItem('bibframe_saved_records', JSON.stringify(records));
-        } catch {}
-      }
-    }
+export function getAllRecordsLocal(): SavedRecord[] {
+  const seeds = getSeedExamples();
+  const recordMap = new Map<string, SavedRecord>();
 
-    // Validate and normalize records
-    return records.map((rec: any) => {
-      // If record property is missing or invalid, skip this record
-      if (!rec.record || typeof rec.record !== 'object') {
-        console.warn(`Skipping invalid record ${rec.id}: no record data`);
-        return null;
+  // Add all seeds first
+  seeds.forEach(s => recordMap.set(s.id, s));
+
+  const stored = typeof window !== 'undefined' ? localStorage.getItem('bibframe_saved_records') : null;
+  if (stored) {
+    try {
+      const records = JSON.parse(stored);
+      if (Array.isArray(records)) {
+        records.forEach((r: any) => {
+          if (r && r.id) {
+            recordMap.set(r.id, r);
+          }
+        });
       }
-      
-      // If record has @graph but not work/instance, convert it
-      if (rec.record['@graph'] && !rec.record.work) {
-        const graph = rec.record['@graph'];
-        
-        try {
-          const { work, instance } = extractNodesFromGraph(graph);
-          
-          rec.record = {
-            '@context': rec.record['@context'] || {
-              'bf': 'http://id.loc.gov/ontologies/bibframe/',
-              'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
-              'rdfs': 'http://www.w3.org/2000/01/rdf-schema#',
-            },
-            work,
-            instance,
-            metadata: {
-              catalogingLanguage: 'en',
-              descriptionConventions: 'rda',
-              resourceType: rec.resourceType || 'Text'
-            }
-          };
-        } catch (error) {
-          console.error(`Failed to convert record ${rec.id} from @graph:`, error);
-          return null;
-        }
-      }
-      
-      return rec;
-    }).filter((rec: any) => rec !== null); // Filter out invalid records
-  } catch (error) {
-    console.error('Error parsing saved records:', error);
-    return getSeedExamples();
+    } catch (e) {
+      console.error('Error parsing localStorage records:', e);
+    }
   }
+
+  // Ensure al-qabasat has latest comprehensive 100% data
+  const qabasatExample = seeds.find(e => e.id === 'al-qabasat-mir-damad');
+  if (qabasatExample) {
+    const existing = recordMap.get('al-qabasat-mir-damad');
+    if (!existing || !existing.record?.work?.['bf:tableOfContents']) {
+      recordMap.set('al-qabasat-mir-damad', qabasatExample);
+    }
+  }
+
+  const allRecords = Array.from(recordMap.values());
+  allRecords.sort((a, b) => {
+    const dateA = new Date(a.modifiedAt || a.createdAt || 0).getTime();
+    const dateB = new Date(b.modifiedAt || b.createdAt || 0).getTime();
+    return dateB - dateA;
+  });
+
+  return allRecords;
 }
 
 export async function getRecordById(id: string): Promise<SavedRecord | null> {
@@ -922,4 +899,82 @@ export async function searchRecords(query: string): Promise<SavedRecord[]> {
     const catalogerMatch = record.cataloger?.toLowerCase().includes(lowerQuery);
     return titleMatch || creatorMatch || catalogerMatch;
   });
+}
+
+export interface ActivityLogItem {
+  id: string;
+  timestamp: string;
+  user: string;
+  action: 'create' | 'update' | 'delete' | 'view' | 'export' | 'import';
+  recordId: string;
+  recordTitle: string;
+  details?: string;
+}
+
+export function logActivity(entry: Omit<ActivityLogItem, 'id' | 'timestamp'>): void {
+  try {
+    const raw = localStorage.getItem('moon_activity_log');
+    const logs: ActivityLogItem[] = raw ? JSON.parse(raw) : [];
+    logs.unshift({
+      id: 'log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8),
+      timestamp: new Date().toISOString(),
+      ...entry,
+    });
+    localStorage.setItem('moon_activity_log', JSON.stringify(logs.slice(0, 500)));
+  } catch (err) {
+    console.error('Error logging activity:', err);
+  }
+}
+
+export function getActivityLogs(): ActivityLogItem[] {
+  try {
+    const raw = localStorage.getItem('moon_activity_log');
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Approve a pending record (Super Admin action)
+ */
+export async function approveRecord(id: string, approverName: string = 'Super Admin'): Promise<SavedRecord | null> {
+  const records = getAllRecordsLocal();
+  const index = records.findIndex(r => r.id === id);
+  if (index === -1) return null;
+
+  records[index] = {
+    ...records[index],
+    status: 'complete',
+    approvedBy: approverName,
+    approvedAt: new Date().toISOString(),
+    modifiedAt: new Date().toISOString(),
+    record: {
+      ...records[index].record,
+      metadata: {
+        ...records[index].record?.metadata,
+        status: 'complete',
+        approvedBy: approverName,
+        approvedAt: new Date().toISOString(),
+      }
+    }
+  };
+
+  try {
+    localStorage.setItem('bibframe_saved_records', JSON.stringify(records));
+  } catch (e) {
+    console.error('Error saving approved record to localStorage:', e);
+  }
+
+  // Also log audit activity
+  logActivity({
+    user: approverName,
+    action: 'update',
+    recordId: id,
+    recordTitle: records[index].title,
+    details: `Record approved by ${approverName} and published as Complete to catalog`,
+  });
+
+  return records[index];
 }

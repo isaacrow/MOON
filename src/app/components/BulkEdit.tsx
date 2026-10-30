@@ -66,21 +66,93 @@ export function BulkEdit({ onClose }: BulkEditProps) {
     setIsProcessing(true);
     setProgress(0);
 
-    // Simulate bulk processing
-    const ids = identifiers.split('\n').filter(id => id.trim());
+    const ids = identifiers.split('\n').map(id => id.trim()).filter(Boolean);
     const total = ids.length;
+    if (total === 0) {
+      setIsProcessing(false);
+      return;
+    }
+
+    const { getFOLIOClient } = await import('../services/folioApiClient');
+    const folioClient = getFOLIOClient();
+    const processedResults: any[] = [];
+    const exportedRecords: any[] = [];
 
     for (let i = 0; i < total; i++) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const id = ids[i];
+      try {
+        if (selectedAction === 'update') {
+          // Fetch real instance
+          const instance = await folioClient.getInstance(id);
+          if (!instance) {
+            throw new Error(`Record ${id} not found in FOLIO`);
+          }
+
+          // Apply selected field modification
+          if (selectedField === 'language') {
+            instance.languages = [newValue];
+          } else if (selectedField === 'classification') {
+            instance.classifications = [
+              ...(instance.classifications || []),
+              { classificationNumber: newValue, classificationTypeId: 'ce176158-b649-43cd-8e7c-47ea5779c5a0' },
+            ];
+          } else if (selectedField === 'subject') {
+            instance.subjects = [...(instance.subjects || []), { value: newValue }];
+          } else if (selectedField === 'note') {
+            instance.notes = [...(instance.notes || []), { note: newValue, staffOnly: false }];
+          } else if (selectedField === 'intendedAudience') {
+            instance.notes = [...(instance.notes || []), { note: `Audience: ${newValue}`, staffOnly: false }];
+          } else if (selectedField === 'genreForm') {
+            instance.notes = [...(instance.notes || []), { note: `Genre: ${newValue}`, staffOnly: false }];
+          }
+
+          await folioClient.updateInstance(id, instance);
+          processedResults.push({
+            id,
+            status: 'success',
+            message: `Updated ${selectedField} successfully in FOLIO & storage`,
+          });
+        } else if (selectedAction === 'delete') {
+          await folioClient.deleteInstance(id);
+          try {
+            await fetch(`/api/records/${id}`, { method: 'DELETE' });
+          } catch (_) {}
+          processedResults.push({
+            id,
+            status: 'success',
+            message: 'Deleted record from FOLIO mod-inventory & disk store',
+          });
+        } else if (selectedAction === 'export') {
+          const instance = await folioClient.getInstance(id);
+          exportedRecords.push(instance);
+          processedResults.push({
+            id,
+            status: 'success',
+            message: 'Record retrieved for batch export',
+          });
+        }
+      } catch (err: any) {
+        processedResults.push({
+          id,
+          status: 'error',
+          message: err?.message || 'Operation failed',
+        });
+      }
+
       setProgress(((i + 1) / total) * 100);
     }
 
-    setResults(ids.map(id => ({
-      id: id.trim(),
-      status: Math.random() > 0.1 ? 'success' : 'error',
-      message: Math.random() > 0.1 ? 'Updated successfully' : 'Record not found'
-    })));
+    if (selectedAction === 'export' && exportedRecords.length > 0) {
+      const blob = new Blob([JSON.stringify(exportedRecords, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bulk-export-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
 
+    setResults(processedResults);
     setIsProcessing(false);
   };
 

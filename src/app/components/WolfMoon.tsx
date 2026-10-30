@@ -30,7 +30,7 @@ import {
   Building, MapPin, Tag, Newspaper, Archive, Shield, Hash, Activity,
   Copy, ExternalLink, Zap, Settings, RefreshCw, Plus, X, Info, Home,
   Moon, Star, Orbit, Waves, Fingerprint, Terminal, Languages, Scissors, Sun, Brain,
-  Sliders, ArrowRightLeft, QrCode, UserCheck, Replace, Columns, Maximize2
+  Sliders, ArrowRightLeft, QrCode, UserCheck, Replace, Columns, Maximize2, LayoutGrid, List
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import moonLogoWhite from "../../assets/white.png";
@@ -102,6 +102,7 @@ import WolfMoonStandaloneOpac from "./WolfMoonStandaloneOpac";
 import { MindMapPreview } from "./ontology/MindMapPreview";
 import { SolarSystemMindMap } from "./SolarSystemMindMap";
 import { ImportRecordDialog } from "./ontology/ImportRecordDialog";
+import AuthorFinder from "./AuthorFinder";
 import { OntologyDrivenFormRenderer } from "./cataloging/OntologyDrivenFormRenderer";
 import { ValidationPanel, validateGraph, ValidationResult } from "./cataloging/ValidationPanel";
 import { RecordViewerDialog } from "./cataloging/RecordViewerDialog";
@@ -331,7 +332,8 @@ export default function WolfMoon({
   onBack, initialWork, initialInstance, onRecordSaved
 }: WolfMoonProps) {
   const { t, i18n } = useTranslation();
-  const { username } = useAuth();
+  const { username, user } = useAuth();
+  const isSuperAdmin = username?.toLowerCase() === 'isaac' || user?.role === 'admin';
   const [language, setLanguage] = useState<"en" | "ar">(i18n.language as "en" | "ar");
 
   // ===== GLASS THEME =====
@@ -387,6 +389,7 @@ export default function WolfMoon({
   const [w3cValidation, setW3cValidation] = useState<JsonLdValidationResult | null>(null);
 
   // ===== ONTOLOGY-DRIVEN STATE =====
+  const [fieldViewMode, setFieldViewMode] = useState<'both' | 'categories' | 'standard'>('both');
   const [workData, setWorkData] = useState<any>(
     initialWork || { "@type": "bf:Work", "@id": uriSet.work, "bf:contribution": [] }
   );
@@ -413,6 +416,78 @@ export default function WolfMoon({
   // ===== DIALOGS =====
   const [showAuthoritySearch, setShowAuthoritySearch] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [showIraqiAuthorityModal, setShowIraqiAuthorityModal] = useState(false);
+
+  const handleInsertIraqiAuthor = (author: any, targetType: 'author' | 'contributor' | 'subject' = 'author') => {
+    const authorName = author.name || author.primaryName || author.preferredName || "Unknown Author";
+    const authorUri = author.moonUri || `http://moon.local/author/${encodeURIComponent(authorName)}`;
+
+    if (targetType === 'subject') {
+      const newSubject = {
+        '@type': 'bf:Person',
+        '@id': authorUri,
+        'rdfs:label': authorName,
+        'bflc:name00MatchKey': authorName,
+        ...(author.wikidataId ? {
+          'bf:identifiedBy': [{
+            '@type': 'bf:Identifier',
+            'rdf:value': author.wikidataId,
+            'bf:source': { '@id': 'http://www.wikidata.org/entity/' }
+          }]
+        } : {})
+      };
+      const existingSubjects = Array.isArray(workData["bf:subject"]) ? [...workData["bf:subject"]] : [];
+      const isDuplicate = existingSubjects.some(s => s["rdfs:label"] === authorName);
+      if (!isDuplicate) {
+        existingSubjects.push(newSubject);
+        setWorkData((prev: any) => ({
+          ...prev,
+          "bf:subject": existingSubjects
+        }));
+        toast.success(`تم إدراج الشخصية الاستنادية "${authorName}" كموضوع (Subject) بنجاح`);
+      } else {
+        toast.info(`الموضوع "${authorName}" موجود بالفعل في التسجيلة`);
+      }
+    } else {
+      const isAuthor = targetType === 'author';
+      const newContrib = {
+        '@type': 'bf:Contribution',
+        'bf:agent': {
+          '@type': 'bf:Person',
+          '@id': authorUri,
+          'rdfs:label': authorName,
+          'bflc:name00MatchKey': authorName,
+          ...(author.wikidataId ? {
+            'bf:identifiedBy': [{
+              '@type': 'bf:Identifier',
+              'rdf:value': author.wikidataId,
+              'bf:source': { '@id': 'http://www.wikidata.org/entity/' }
+            }]
+          } : {})
+        },
+        'bf:role': {
+          '@type': 'bf:Role',
+          '@id': isAuthor ? 'http://id.loc.gov/vocabulary/relators/aut' : 'http://id.loc.gov/vocabulary/relators/ctb',
+          'rdfs:label': isAuthor ? 'Author / مؤلف' : 'Contributor / مساهم'
+        }
+      };
+
+      const existingContributions = Array.isArray(workData["bf:contribution"]) ? [...workData["bf:contribution"]] : [];
+      const isDuplicate = existingContributions.some(c => c["bf:agent"]?.["rdfs:label"] === authorName);
+      if (!isDuplicate) {
+        existingContributions.push(newContrib);
+        setWorkData((prev: any) => ({
+          ...prev,
+          "bf:contribution": existingContributions
+        }));
+        toast.success(`تم إدراج "${authorName}" بنجاح كـ ${isAuthor ? 'مؤلف (Author)' : 'مساهم (Contributor)'}`);
+      } else {
+        toast.info(`"${authorName}" موجود بالفعل في مساهمات التسجيلة`);
+      }
+    }
+    setShowIraqiAuthorityModal(false);
+  };
+
   const [showExampleMenu, setShowExampleMenu] = useState(false);
 
   // ===== EXPANDED SECTIONS =====
@@ -677,6 +752,18 @@ export default function WolfMoon({
   const handlePropertyChange = useCallback((nodeUri: string, property: string, value: any) => {
     graphStore.setProperty(nodeUri, property, value);
     const unprefixed = property.replace(/^bf:/, '');
+    if (property === 'bf:contribution' || property === 'contribution' || unprefixed === 'contribution') {
+      const contribArray = Array.isArray(value) ? value : (value ? [value] : []);
+      setWorkData((prev: any) => ({
+        ...prev,
+        'bf:contribution': contribArray,
+        'contribution': contribArray,
+      }));
+      graphStore.setProperty(nodeUri, 'bf:contribution', contribArray);
+      setSaveStatus("unsaved");
+      setTimeout(() => regenerateRDF(), 500);
+      return;
+    }
     const titleVal = typeof value === 'object' && value ? (value['bf:mainTitle'] || value.mainTitle || value['rdfs:label'] || value) : value;
     if (nodeUri === uriSet.work) {
       setWorkData((prev: any) => ({
@@ -1007,11 +1094,18 @@ export default function WolfMoon({
           createdAt: new Date().toISOString(),
           catalogerId: username || "anonymous",
           hiddenFields: Array.from(hiddenFields),
+          status: (username?.toLowerCase() === "isaac" || username?.toLowerCase() === "admin") ? "complete" : "pending-review",
+          catalogerRole: (username?.toLowerCase() === "isaac" || username?.toLowerCase() === "admin") ? "super-admin" : "cataloger"
         },
       };
+      const initialStatus = (username?.toLowerCase() === "isaac" || username?.toLowerCase() === "admin") ? "complete" : "pending-review";
       await saveRecord(record, username || "Anonymous");
       setSaveStatus("saved");
-      toast.success("Record saved!", { description: title });
+      if (initialStatus === "pending-review") {
+        toast.info(language === "ar" ? "تم حفظ التسجيلة وهي قيد المراجعة بانتظار اعتماد المشرف العام (isaac)" : "Record saved! Status: Pending review by Super Admin (isaac)", { description: title });
+      } else {
+        toast.success(language === "ar" ? "تم حفظ التسجيلة واعتمادها في الفهرس العام!" : "Record saved and approved into catalog!", { description: title });
+      }
       if (onRecordSaved) onRecordSaved();
     } catch (error) {
       console.error("Save error:", error);
@@ -1034,7 +1128,13 @@ export default function WolfMoon({
 
   const graph = buildBibframeGraph(workData, instanceData);
   const graphStats = graphStore.getStats();
-  const authorityNodes = (workData["bf:contribution"] || []).filter((c: any) => c["bf:agent"]).map((c: any, i: number) => ({
+  const rawContribs = workData["bf:contribution"] || workData["contribution"];
+  const normalizedContributions: any[] = Array.isArray(rawContribs)
+    ? rawContribs
+    : rawContribs && typeof rawContribs === "object"
+    ? [rawContribs]
+    : [];
+  const authorityNodes = normalizedContributions.filter((c: any) => c && typeof c === 'object' && c["bf:agent"]).map((c: any, i: number) => ({
     id: c["bf:agent"]["@id"] || `agent-${i}`, label: c["bf:agent"]["rdfs:label"] || "Unknown",
     source: c["bf:agent"]["@id"]?.includes("loc.gov") ? ("LOC" as const) : ("AfIqa" as const),
     uri: c["bf:agent"]["@id"] || "", type: "person" as const, connections: [],
@@ -1119,16 +1219,19 @@ export default function WolfMoon({
               <button
                 type="button"
                 onClick={onBack}
-                className="prismatic-pill-button hover:scale-105 active:scale-95 transition-transform"
+                className="hover:scale-105 active:scale-95 transition-all flex items-center gap-2 px-4 py-2 text-xs font-bold text-white cursor-pointer shadow-xl"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.21)',
+                  backdropFilter: 'blur(9px) saturate(1.5) brightness(1.1)',
+                  WebkitBackdropFilter: 'blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)',
+                  borderRadius: '120px',
+                  boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.15), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.2), 0 8px 32px rgba(0, 0, 0, 0.2)',
+                  border: '1px solid rgba(255, 255, 255, 0.4)',
+                }}
                 title="Return to Dashboard"
               >
-                {/* Chromatic Liquid Prism Ring surrounding inner Home disc */}
-                <div className="prismatic-ring-wrapper" style={{ width: '36px', height: '36px' }}>
-                  <div className="prismatic-inner-disc">
-                    <Home className="h-4 w-4 text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]" />
-                  </div>
-                </div>
-                <span className="text-xs font-bold pr-2">{t("back") || "Dashboard"}</span>
+                <Home className="h-4 w-4 text-white drop-shadow" />
+                <span className="text-xs font-bold">{t("back") || "Dashboard"}</span>
               </button>
             )}
             <div className="flex items-center gap-3.5">
@@ -1137,7 +1240,7 @@ export default function WolfMoon({
               </div>
               <div>
                 <h1 className="text-xl font-black tracking-tight flex items-center gap-2 text-white">
-                  <span>WOLF MOON</span>
+                  <span>MOON</span>
                   <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-white/20 border border-white/30 text-white font-bold uppercase tracking-wider">
                     Studio
                   </span>
@@ -1157,47 +1260,34 @@ export default function WolfMoon({
               <span>{language === "en" ? "عربي" : "EN"}</span>
             </button>
 
-            {/* Field Manager */}
+            {/* Field Manager (Restricted to Super Admin Isaac) */}
             <button
               type="button"
-              onClick={() => setShowFieldManager(!showFieldManager)}
-              className="glass-bubble-pill flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold cursor-pointer"
-              style={{
-                borderColor: hiddenFields.size > 0 ? "rgba(251,191,36,0.6)" : undefined,
-                color: hiddenFields.size > 0 ? "#fbbf24" : undefined,
+              onClick={() => {
+                if (!isSuperAdmin) {
+                  toast.error(
+                    language === "ar"
+                      ? "عذراً، تخصيص القوالب مقتصر على المشرف العام (إسحاق) فقط."
+                      : "Access restricted: Custom templates are only accessible by Super Admin (Isaac)."
+                  );
+                  return;
+                }
+                setShowFieldManager(!showFieldManager);
               }}
+              className="glass-bubble-pill flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold cursor-pointer transition-all"
+              style={{
+                borderColor: hiddenFields.size > 0 ? "rgba(251,191,36,0.8)" : undefined,
+                color: hiddenFields.size > 0 ? "#fbbf24" : undefined,
+                opacity: isSuperAdmin ? 1 : 0.85,
+              }}
+              title={!isSuperAdmin ? (language === "ar" ? "مخصص للمشرف العام إسحاق فقط" : "Super Admin Isaac only") : undefined}
             >
               <Settings className="h-3.5 w-3.5" />
               <span>{hiddenFields.size > 0 ? `${hiddenFields.size} ${t("fieldsHidden")}` : t("customTemplates")}</span>
+              {!isSuperAdmin && <Lock className="h-2.5 w-2.5 text-white/50" />}
             </button>
 
-            {/* Glass Theme Segmented */}
-            <div className="flex items-center gap-1 p-1 rounded-full bg-white/10 border border-white/20 backdrop-blur-xl">
-              <button
-                type="button"
-                onClick={() => setGlassTheme("dark")}
-                className={`px-3 py-1 text-[11px] font-bold rounded-full transition-all cursor-pointer ${glassTheme === "dark" ? "glass-bubble-pill text-white shadow-sm" : "text-white/60 hover:text-white"}`}
-              >
-                <Moon className="h-3 w-3 inline mr-1" />
-                {t("darkGlass")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setGlassTheme("legacy")}
-                className={`px-3 py-1 text-[11px] font-bold rounded-full transition-all cursor-pointer ${glassTheme === "legacy" ? "glass-bubble-pill text-white shadow-sm" : "text-white/60 hover:text-white"}`}
-              >
-                <Star className="h-3 w-3 inline mr-1" />
-                {t("legacyGlass")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setGlassTheme("classic")}
-                className={`px-3 py-1 text-[11px] font-bold rounded-full transition-all cursor-pointer ${glassTheme === "classic" ? "glass-bubble-pill text-white shadow-sm" : "text-white/60 hover:text-white"}`}
-              >
-                <Sun className="h-3 w-3 inline mr-1" />
-                {t("simpleClassic")}
-              </button>
-            </div>
+            
 
             {/* Institutional Score Badge */}
             {institutionalValidation && (
@@ -1264,35 +1354,59 @@ export default function WolfMoon({
 
         {/* Action Buttons Toolbar */}
         <div className="max-w-7xl mx-auto mt-3 flex items-center gap-2 flex-wrap">
+          {/* Glass Save Button */}
+          <button
+            type="button"
+            onClick={handleSave}
+            className="hover:scale-105 active:scale-95 transition-all flex items-center gap-2 px-5 py-2 text-xs font-black text-white cursor-pointer shadow-xl"
+            style={{
+              background: 'rgba(255, 255, 255, 0.21)',
+              backdropFilter: 'blur(9px) saturate(1.5) brightness(1.1)',
+              WebkitBackdropFilter: 'blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)',
+              borderRadius: '120px',
+              boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.15), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.2), 0 8px 32px rgba(0, 0, 0, 0.2)',
+              border: '1px solid rgba(255, 255, 255, 0.4)',
+            }}
+          >
+            <Save className="h-3.5 w-3.5 text-white drop-shadow" />
+            <span>{t("save")}</span>
+          </button>
+
+          {/* Iraqi Authority Finder Button */}
+          <button
+            type="button"
+            onClick={() => setShowIraqiAuthorityModal(true)}
+            className="hover:scale-105 active:scale-95 transition-all flex items-center gap-2 px-5 py-2 text-xs font-black text-white cursor-pointer shadow-xl"
+            style={{
+              background: 'rgba(255, 255, 255, 0.21)',
+              backdropFilter: 'blur(9px) saturate(1.5) brightness(1.1)',
+              WebkitBackdropFilter: 'blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)',
+              borderRadius: '120px',
+              boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.15), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.2), 0 8px 32px rgba(0, 0, 0, 0.2)',
+              border: '1px solid rgba(255, 255, 255, 0.4)',
+            }}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-amber-300 drop-shadow" />
+            <span>🇮🇶 Iraqi Authority Finder</span>
+          </button>
+
+
           {[
-            { onClick: handleSave, icon: <Save className="h-3.5 w-3.5" />, label: t("save"), primary: true },
             { onClick: handleResetAll, icon: <RefreshCw className="h-3.5 w-3.5" />, label: t("reset") || "Reset", danger: true },
-            { onClick: () => setShowExampleMenu(!showExampleMenu), icon: <Database className="h-3.5 w-3.5" />, label: t("examples") },
-            { onClick: () => setShowAuthoritySearch(true), icon: <Search className="h-3.5 w-3.5" />, label: t("authoritySearch") },
             { onClick: () => setShowImportDialog(true), icon: <Upload className="h-3.5 w-3.5" />, label: t("import") },
             { onClick: () => downloadFile(JSON.stringify(w3cJsonLd || graphJsonld || graph, null, 2), `${recordId}-w3c.jsonld`, "application/ld+json"), icon: <Download className="h-3.5 w-3.5" />, label: t("w3cJsonLd") },
-          ].map((btn: any, i) => (
+          ].map((btn, i) => (
             <button
               type="button"
               key={i}
               onClick={btn.onClick}
-              className={`glass-bubble-pill flex items-center gap-1.5 px-4 py-2 text-xs font-bold transition-all cursor-pointer ${btn.primary ? "bg-cyan-500/40 border-cyan-400 text-white shadow-lg" : "text-white"}`}
+              className="glass-bubble-pill flex items-center gap-1.5 px-4 py-2 text-xs font-bold transition-all cursor-pointer text-white"
               style={btn.danger ? { borderColor: 'rgba(248,113,113,0.5)', color: '#fca5a5' } : undefined}
             >
               {btn.icon}
               <span>{btn.label}</span>
             </button>
           ))}
-
-          <button
-            type="button"
-            onClick={() => handleLoadExample(realLocExamples[0].data)}
-            className="glass-bubble-pill flex items-center gap-1.5 px-4 py-2 text-xs font-bold cursor-pointer bg-gradient-to-r from-amber-500/40 to-orange-500/40 border-amber-400 text-white shadow-lg hover:from-amber-500/60 hover:to-orange-500/60 transition-all"
-            title="تحميل تسجيلة القبسات الكاملة لجميع الحقول بنسبة 100%"
-          >
-            <Sparkles className="h-3.5 w-3.5 text-amber-300" />
-            <span>⚡ تحميل تسجيلة القبسات الكاملة (100% حقول)</span>
-          </button>
           
           <button
             type="button"
@@ -1302,15 +1416,6 @@ export default function WolfMoon({
             <Download className="h-3.5 w-3.5 text-emerald-400" />
             <span>RDF/XML</span>
           </button>
-
-          <a
-            href="/opac.html"
-            className="glass-bubble-pill flex items-center gap-1.5 px-4 py-2 text-xs font-bold cursor-pointer bg-gradient-to-r from-blue-600/40 to-indigo-600/40 border-blue-400 text-white shadow-lg hover:from-blue-600/60 hover:to-indigo-600/60 transition-all ml-auto"
-            title="فتح بوابة الفهرس العام المستقلة للمستفيدين (Share-VDE & Libris)"
-          >
-            <ExternalLink className="h-3.5 w-3.5 text-blue-300" />
-            <span>WOF MOON OPAC</span>
-          </a>
 
           {w3cTurtle && (
             <button
@@ -1334,28 +1439,7 @@ export default function WolfMoon({
           )}
         </div>
 
-        {/* Examples dropdown */}
-        {showExampleMenu && (
-          <div
-            className="absolute mt-2 w-80 rounded-2xl z-50 max-h-80 overflow-y-auto p-3 shadow-2xl glass-card"
-          >
-            <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-white/50 border-b border-white/15">
-              {t("realLocExamples")}
-            </div>
-            {realLocExamples.map((example) => (
-              <button
-                type="button"
-                key={example.id}
-                className="w-full text-left px-3 py-2.5 rounded-xl transition-all hover:bg-white/20 text-white cursor-pointer"
-                onClick={() => handleLoadExample(example.data)}
-              >
-                <div className="font-bold text-xs text-white">{example.name}</div>
-                <div className="text-[10px] text-white/70">{example.description}</div>
-              </button>
-            ))}
-          </div>
-        )}
-      </header>
+        </header>
 
       {/* ===== SEGMENTED OUTPUT TABS (Frosted Pill System) ===== */}
       <nav
@@ -1370,21 +1454,7 @@ export default function WolfMoon({
             { key: "rdf-xml" as OutputTab, icon: <Code className="h-3.5 w-3.5" />, label: "RDF/XML", color: "#10b981" },
             { key: "turtle" as OutputTab, icon: <Code className="h-3.5 w-3.5" />, label: t("turtle"), color: "#a78bfa" },
             { key: "ntriples" as OutputTab, icon: <FileText className="h-3.5 w-3.5" />, label: t("nTriples"), color: "#fb923c" },
-            { key: "marc" as OutputTab, icon: <Database className="h-3.5 w-3.5" />, label: t("marc"), color: "#f87171" },
-            { key: "marc21-viewer" as OutputTab, icon: <Terminal className="h-3.5 w-3.5" />, label: "MARC 21 Viewer", color: "#f43f5e" },
-            { key: "triples" as OutputTab, icon: <Hash className="h-3.5 w-3.5" />, label: `${t("triples")} (${tripleCount})`, color: "#fbbf24" },
-            { key: "opac" as OutputTab, icon: <Eye className="h-3.5 w-3.5" />, label: "OPAC", color: "#60a5fa" },
-            { key: "mindmap" as OutputTab, icon: <Sparkles className="h-3.5 w-3.5" />, label: t("mindMap"), color: "#f59e0b" },
-            { key: "validation" as OutputTab, icon: <Shield className="h-3.5 w-3.5" />, label: t("validation"), color: "#34d399" },
-            { key: "relationships" as OutputTab, icon: <Network className="h-3.5 w-3.5" />, label: t("relationships"), color: "#818cf8" },
-            { key: "authority-graph" as OutputTab, icon: <Globe className="h-3.5 w-3.5" />, label: t("authorityGraph"), color: "#c084fc" },
-            { key: "discovery" as OutputTab, icon: <Orbit className="h-3.5 w-3.5" />, label: t("discovery.title"), color: "#06b6d4" },
-            { key: "scriptshifter" as OutputTab, icon: <Languages className="h-3.5 w-3.5" />, label: "ScriptShifter", color: "#c084fc" },
-            { key: "lc-cutter" as OutputTab, icon: <Scissors className="h-3.5 w-3.5" />, label: "LC Cutter", color: "#f472b6" },
-            { key: "ai-engine" as OutputTab, icon: <Brain className="h-3.5 w-3.5" />, label: t("ai.title"), color: "#a855f7" },
-            { key: "hubs" as OutputTab, icon: <Layers className="h-3.5 w-3.5" />, label: "Hubs & Expression", color: "#a855f7" },
-            { key: "remerge-marc" as OutputTab, icon: <ArrowRightLeft className="h-3.5 w-3.5" />, label: "Remerge MARC", color: "#38bdf8" },
-            { key: "marva-tools" as OutputTab, icon: <Sparkles className="h-3.5 w-3.5" />, label: "Marva Tools", color: "#ec4899" },
+            { key: "marc21-viewer" as OutputTab, icon: <BookOpen className="h-3.5 w-3.5" />, label: "MARC 21 View", color: "#f43f5e" }
           ] as const).map(tab => (
             <button
               type="button"
@@ -1434,12 +1504,22 @@ export default function WolfMoon({
 
             {/* Floating Marva Diacritics Bar */}
             {marvaPreferences.showDiacriticBar && (
-              <div className="sticky top-0 z-20 px-4 py-2 rounded-2xl bg-black/50 border border-white/10 backdrop-blur-md flex items-center justify-between gap-2 shadow-lg flex-wrap">
+              <div
+                className="sticky top-0 z-20 px-6 py-2.5 flex items-center justify-between gap-3 flex-wrap"
+                style={{
+                  borderRadius: "120px",
+                  background: "rgba(255, 255, 255, 0.21)",
+                  backdropFilter: "blur(9px) saturate(1.5) brightness(1.1)",
+                  WebkitBackdropFilter: "blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)",
+                  boxShadow: "inset 0 0 0 1px rgba(255, 255, 255, 0.15), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.2), 0 8px 32px rgba(0, 0, 0, 0.2)",
+                  border: "1px solid rgba(255, 255, 255, 0.4)",
+                }}
+              >
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1">
-                    <Sparkles className="w-3 h-3" /> Marva Diacritics:
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-cyan-300" /> Marva Diacritics:
                   </span>
-                  <div className="flex items-center gap-1 flex-wrap">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     {MARVA_DIACRITICS.map((d) => (
                       <button
                         key={d.name}
@@ -1449,14 +1529,14 @@ export default function WolfMoon({
                           navigator.clipboard.writeText(d.char);
                           toast.success(`Copied '${d.char}' (${d.name}) to clipboard!`);
                         }}
-                        className="w-7 h-7 rounded-lg bg-white/10 hover:bg-sky-500/30 text-white hover:text-sky-300 font-bold text-sm flex items-center justify-center transition-colors cursor-pointer"
+                        className="w-7 h-7 rounded-full bg-white/15 hover:bg-white/30 text-white font-bold text-sm flex items-center justify-center transition-all cursor-pointer border border-white/20 shadow-sm"
                       >
                         {d.char}
                       </button>
                     ))}
                   </div>
                 </div>
-                <div className="flex items-center gap-2 text-[10px] text-gray-400">
+                <div className="flex items-center gap-2 text-[10px] text-white/70">
                   <span className="font-mono">Click to copy</span>
                 </div>
               </div>
@@ -1466,8 +1546,17 @@ export default function WolfMoon({
             <BMCard>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                    style={{ background: "linear-gradient(135deg, #3b82f6, #60a5fa)", boxShadow: "0 4px 16px rgba(59,130,246,0.15)" }}>
+                  <div
+                    className="w-12 h-12 flex items-center justify-center text-white"
+                    style={{
+                      borderRadius: "20px",
+                      background: "rgba(255, 255, 255, 0.21)",
+                      backdropFilter: "blur(9px) saturate(1.5) brightness(1.1)",
+                      WebkitBackdropFilter: "blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)",
+                      boxShadow: "inset 0 0 0 1px rgba(255, 255, 255, 0.15), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.2), 0 8px 32px rgba(0, 0, 0, 0.2)",
+                      border: "1px solid rgba(255, 255, 255, 0.4)",
+                    }}
+                  >
                     {TEMPLATE_ICONS[selectedTemplate] || <BookOpen className="h-5 w-5 text-white" />}
                   </div>
                   <div>
@@ -1513,6 +1602,69 @@ export default function WolfMoon({
                 isDark={!isLight}
               />
             ) : (
+            <>
+            {/* Field Display Mode Selector: Category Cards (Img 2) vs Standard MARC (Img 1) */}
+            <div 
+              className="flex items-center justify-between px-5 py-3 rounded-2xl mb-6 flex-wrap gap-3"
+              style={{
+                borderRadius: '20px',
+                background: 'rgba(255, 255, 255, 0.22)',
+                backdropFilter: 'blur(16px) saturate(1.5) brightness(1.1)',
+                WebkitBackdropFilter: 'blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)',
+                border: '1px solid rgba(255, 255, 255, 0.45)',
+                boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.2), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.25), 0 8px 32px rgba(0, 0, 0, 0.15)',
+              }}
+            >
+              <div className="flex items-center gap-2.5">
+                <Sliders className="h-4 w-4 text-sky-400" />
+                <span className="text-xs font-bold text-white tracking-wide">
+                  {language === "ar" ? "نوع ونمط عرض الحقول:" : "Field Layout Style:"}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 p-1 rounded-xl bg-black/25 border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setFieldViewMode('categories')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    fieldViewMode === 'categories'
+                      ? 'bg-blue-600 text-white shadow-lg scale-105'
+                      : 'text-white/70 hover:text-white hover:bg-white/10'
+                  }`}
+                  title="عرض بطاقات الحقول المصنفة"
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                  <span>{language === "ar" ? "أقسام البطاقات" : "Category Cards"}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setFieldViewMode('standard')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    fieldViewMode === 'standard'
+                      ? 'bg-blue-600 text-white shadow-lg scale-105'
+                      : 'text-white/70 hover:text-white hover:bg-white/10'
+                  }`}
+                  title="عرض الحقول المعيارية مع رموز مارك"
+                >
+                  <List className="h-3.5 w-3.5" />
+                  <span>{language === "ar" ? "حقول مارك المعيارية" : "Standard MARC Fields"}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setFieldViewMode('both')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    fieldViewMode === 'both'
+                      ? 'bg-blue-600 text-white shadow-lg scale-105'
+                      : 'text-white/70 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  <span>{language === "ar" ? "عرض الكل" : "Show Both"}</span>
+                </button>
+              </div>
+            </div>
+
             <div className={
               loadType === "work-only" || loadType === "instance-only"
                 ? "flex flex-col gap-6"
@@ -1524,59 +1676,38 @@ export default function WolfMoon({
               {(loadType === "work-instance" || loadType === "work-only") && (
               <BMEntitySection
                 title={t("work")}
-                subtitle="bf:Work (Marva Blue)"
+                subtitle={language === "ar" ? "bf:Work (العمل)" : "bf:Work"}
                 color={marvaPreferences.workColor || BM.accent}
                 icon={<BookOpen className="h-5 w-5" style={{ color: marvaPreferences.workColor || BM.accent }} />}
                 uri={uriSet.work} expanded={expandedEntities.has("Work")} onToggle={() => toggleEntity("Work")}
                 requiredCount={workRequiredProps.length} groupCount={templateWorkGroups.length}>
                 
-                {/* Expression Hub Link per Marva Manual & Primer Appendix A */}
-                <div className="mb-4 p-3.5 rounded-2xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-300">
-                      <Layers className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-white">Expression Of (BIBFRAME Hub)</span>
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-purple-500/20 text-purple-300 font-bold">bf:expressionOf</span>
-                      </div>
-                      <p className="text-[11px] text-gray-400">
-                        {activeHub ? `Linked to Hub: ${activeHub.aap}` : "No Hub linked yet for work collocation."}
-                      </p>
+                {(fieldViewMode === "both" || fieldViewMode === "categories") && (
+                  <OntologyDrivenFormRenderer entityType="Work" nodeUri={uriSet.work} graphStore={graphStore} data={workData} onChange={handlePropertyChange}
+                    hiddenFields={hiddenFields} onHideField={hideField} isLight={isLight} />
+                )}
+                {(fieldViewMode === "both" || fieldViewMode === "standard") && (
+                  <div className={(fieldViewMode === "both" ? "mt-6 pt-4 " : "")} style={fieldViewMode === "both" ? { borderTop: `1px solid ${BM.cardBorder}` } : undefined}>
+                    <h4 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2" style={{ color: BM.textDim }}>
+                      <FileText className="h-3.5 w-3.5" /> {language === "ar" ? "حقول الإنطولوجيا المعيارية (MARC LOD)" : t("ontologyDrivenFields")}
+                    </h4>
+                    <div className="space-y-3">
+                      {workProperties.filter(p => !hiddenFields.has(`ontology:${p.uri}`)).map(property => (
+                        <BMFieldWrapper key={property.uri} fieldKey={`ontology:${property.uri}`} onHide={hideField}>
+                          <OntologyField property={property} value={getPropertyValue(workData, property.uri)}
+                            onChange={(value) => updateWorkProperty(property.uri, value)} language={language} />
+                        </BMFieldWrapper>
+                      ))}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("hubs")}
-                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white transition-colors shrink-0 flex items-center gap-1.5"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    {activeHub ? "Manage Hub" : "Link / Create Hub"}
-                  </button>
-                </div>
-                <OntologyDrivenFormRenderer entityType="Work" nodeUri={uriSet.work} graphStore={graphStore} data={workData} onChange={handlePropertyChange}
-                  hiddenFields={hiddenFields} onHideField={hideField} isLight={isLight} />
-                <div className="mt-6 pt-4" style={{ borderTop: `1px solid ${BM.cardBorder}` }}>
-                  <h4 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2" style={{ color: BM.textDim }}>
-                    <FileText className="h-3.5 w-3.5" /> {t("ontologyDrivenFields")}
-                  </h4>
-                  <div className="space-y-3">
-                    {workProperties.filter(p => !hiddenFields.has(`ontology:${p.uri}`)).map(property => (
-                      <BMFieldWrapper key={property.uri} fieldKey={`ontology:${property.uri}`} onHide={hideField}>
-                        <OntologyField property={property} value={getPropertyValue(workData, property.uri)}
-                          onChange={(value) => updateWorkProperty(property.uri, value)} language={language} />
-                      </BMFieldWrapper>
-                    ))}
-                  </div>
-                </div>
-                {workData["bf:contribution"]?.length > 0 && (
+                )}
+                {normalizedContributions.length > 0 && (
                   <div className="mt-4 p-4 rounded-xl" style={{ background: "rgba(59,130,246,0.06)", border: `1px solid ${BM.accentBorder}` }}>
                     <h4 className="text-xs font-bold mb-2 flex items-center gap-2" style={{ color: BM.accent }}>
-                      <User className="h-3.5 w-3.5" /> {t("contributors")} ({workData["bf:contribution"].length})
+                      <User className="h-3.5 w-3.5" /> {language === "ar" ? "المؤلفون والمساهمون" : t("contributors")} ({normalizedContributions.length})
                     </h4>
                     <div className="space-y-1.5">
-                      {workData["bf:contribution"].map((c: any, i: number) => (
+                      {normalizedContributions.map((c: any, i: number) => (
                         <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg text-sm" style={{ background: isClassic ? "#f9fafb" : isLegacy ? "rgba(255,255,255,0.5)" : "rgba(30,41,59,0.6)", border: isClassic ? "1px solid #e5e7eb" : isLegacy ? "1px solid rgba(255,255,255,0.4)" : "1px solid rgba(59,130,246,0.12)", backdropFilter: hasGlass ? "blur(8px)" : undefined }}>
                           <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black"
                             style={{ background: "rgba(59,130,246,0.15)", color: BM.accent }}>
@@ -1597,61 +1728,41 @@ export default function WolfMoon({
               {(loadType === "work-instance" || loadType === "instance-only") && (
               <BMEntitySection
                 title={t("instance")}
-                subtitle="bf:Instance (Marva Peach)"
+                subtitle={language === "ar" ? "bf:Instance (التجسيدة)" : "bf:Instance"}
                 color={marvaPreferences.instanceColor || BM.accentDim}
                 icon={<Package className="h-5 w-5" style={{ color: marvaPreferences.instanceColor || BM.accentDim }} />}
                 uri={uriSet.instance} expanded={expandedEntities.has("Instance")} onToggle={() => toggleEntity("Instance")}
                 requiredCount={instanceRequiredProps.length} groupCount={templateInstanceGroups.length}>
                 
-                {/* MLC Call Number Generator per Marva Manual */}
-                <div className="mb-4 p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-indigo-500/20 flex items-center justify-center text-indigo-300">
-                      <Hash className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-white">LC Classification & Shelf Mark</span>
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-indigo-500/20 text-indigo-300 font-bold">MLC Numbers</span>
-                      </div>
-                      <p className="text-[11px] text-gray-400">
-                        {instanceData?.shelfMark ? `Call Number: ${instanceData.shelfMark}` : "Assign Minimal Level Cataloging or LC Cutter"}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowToolsModal(true)}
-                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shrink-0 flex items-center gap-1.5"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    Generate MLC
-                  </button>
-                </div>
-                <OntologyDrivenFormRenderer entityType="Instance" nodeUri={uriSet.instance} graphStore={graphStore} data={instanceData} onChange={handlePropertyChange}
-                  hiddenFields={hiddenFields} onHideField={hideField} isLight={isLight} />
-                <div className="mt-6 pt-4" style={{ borderTop: `1px solid ${BM.cardBorder}` }}>
-                  <h4 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2" style={{ color: BM.textDim }}>
-                    <FileText className="h-3.5 w-3.5" /> {t("ontologyDrivenFields")}
-                  </h4>
-                  <div className="space-y-3">
-                    {instanceProperties.filter(p => !hiddenFields.has(`ontology:${p.uri}`)).map(property => (
-                      <BMFieldWrapper key={property.uri} fieldKey={`ontology:${property.uri}`} onHide={hideField}>
-                        <OntologyField property={property} value={getPropertyValue(instanceData, property.uri)}
-                          onChange={(value) => updateInstanceProperty(property.uri, value)} language={language} />
+                {(fieldViewMode === "both" || fieldViewMode === "categories") && (
+                  <OntologyDrivenFormRenderer entityType="Instance" nodeUri={uriSet.instance} graphStore={graphStore} data={instanceData} onChange={handlePropertyChange}
+                    hiddenFields={hiddenFields} onHideField={hideField} isLight={isLight} />
+                )}
+                {(fieldViewMode === "both" || fieldViewMode === "standard") && (
+                  <div className={(fieldViewMode === "both" ? "mt-6 pt-4 " : "")} style={fieldViewMode === "both" ? { borderTop: `1px solid ${BM.cardBorder}` } : undefined}>
+                    <h4 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2" style={{ color: BM.textDim }}>
+                      <FileText className="h-3.5 w-3.5" /> {language === "ar" ? "حقول الإنطولوجيا المعيارية (bf:Instance)" : t("ontologyDrivenFields")}
+                    </h4>
+                    <div className="space-y-3">
+                      {instanceProperties.filter(p => !hiddenFields.has(`ontology:${p.uri}`)).map(property => (
+                        <BMFieldWrapper key={property.uri} fieldKey={`ontology:${property.uri}`} onHide={hideField}>
+                          <OntologyField property={property} value={getPropertyValue(instanceData, property.uri)}
+                            onChange={(value) => updateInstanceProperty(property.uri, value)} language={language} />
                       </BMFieldWrapper>
                     ))}
                   </div>
-                </div>
+                  </div>
+                )}
               </BMEntitySection>
               )}
             </div>
+            </>
             )}
 
             {/* EXPRESSION (optional) — full width below */}
             {enableExpression && (
               <BMEntitySection title={t("expression")} subtitle={t("realizationOfWork")} color={BM.secondary}
-                icon={<Sparkles className="h-5 w-5" style={{ color: BM.secondary }} />}
+                icon={<Layers className="h-5 w-5" style={{ color: BM.secondary }} />}
                 uri={uriSet.expression} expanded={expandedEntities.has("Expression")} onToggle={() => toggleEntity("Expression")}>
                 <OntologyDrivenFormRenderer entityType="Expression" nodeUri={uriSet.expression} graphStore={graphStore} onChange={handlePropertyChange}
                   hiddenFields={hiddenFields} onHideField={hideField} isLight={isLight} />
@@ -2202,47 +2313,64 @@ export default function WolfMoon({
 
       {/* ===== FIELD MANAGER PANEL ===== */}
       <AnimatePresence>
-        {showFieldManager && (
+        {showFieldManager && isSuperAdmin && (
           <motion.div
-            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}
-            className="fixed bottom-6 z-50 w-[420px] max-h-[70vh] rounded-2xl overflow-hidden"
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="fixed bottom-6 z-50 overflow-hidden flex flex-col"
             style={{
-              background: isClassic ? "#ffffff" : isLegacy ? "rgba(255,255,255,0.97)" : "rgba(15,23,42,0.97)",
-              border: `1px solid ${BM.cardBorder}`,
-              backdropFilter: isClassic ? undefined : "blur(30px) saturate(180%)",
-              boxShadow: isClassic ? "0 4px 20px rgba(0,0,0,0.12)" : "0 20px 60px rgba(0,0,0,0.4)",
+              width: "420px",
+              height: "280px",
+              borderRadius: "120px",
+              background: "rgba(255, 255, 255, 0.94)",
+              backdropFilter: "blur(4.5px) url(#lg-filter) blur(9px) saturate(1.5) brightness(1.1)",
+              WebkitBackdropFilter: "blur(36px) saturate(1.8) brightness(1.15) contrast(1.05)",
+              boxShadow:
+                "inset 0 0 0 1px rgba(255, 255, 255, 0.8), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.95), inset 0 0 12px rgba(255, 255, 255, 0.6), 0 8px 32px rgba(0, 0, 0, 0.18)",
+              border: "1.5px solid rgba(255, 255, 255, 0.95)",
+              color: "#0f172a",
               insetInlineEnd: "1.5rem",
             }}>
             {/* Header */}
-            <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: `1px solid ${BM.cardBorder}` }}>
-              <h3 className="text-sm font-black flex items-center gap-2" style={{ color: BM.text }}>
-                <Settings className="h-4 w-4" style={{ color: BM.accent }} />
-                {t("fieldCustomization")}
+            <div className="flex items-center justify-between px-10 pt-4 pb-2 border-b border-slate-200/70">
+              <h3 className="text-xs font-black flex items-center gap-2 text-slate-900">
+                <Settings className="h-3.5 w-3.5 text-blue-600" />
+                <span>{t("fieldCustomization")}</span>
+                <span className="text-[9px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold">Super Admin (Isaac)</span>
               </h3>
-              <button onClick={() => setShowFieldManager(false)} className="p-1 rounded-lg transition-all hover:opacity-70">
-                <X className="h-4 w-4" style={{ color: BM.textDim }} />
+              <button
+                type="button"
+                onClick={() => setShowFieldManager(false)}
+                className="p-1 rounded-full bg-slate-100 hover:bg-slate-200 transition-all text-slate-500 hover:text-slate-800 cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
               </button>
             </div>
 
-            <div className="overflow-y-auto max-h-[calc(70vh-52px)]">
+            <div className="overflow-y-auto flex-1 px-8 py-2 scrollbar-thin">
               {/* Summary bar */}
-              <div className="px-5 py-3 flex items-center gap-3 flex-wrap" style={{ borderBottom: `1px solid ${BM.cardBorder}` }}>
-                <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg" style={{ background: "rgba(52,199,89,0.1)", color: BM.success }}>
+              <div className="px-2 py-2 flex items-center gap-2 flex-wrap border-b border-slate-200/70">
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800">
                   {allFieldKeys.length - hiddenFields.size} {t("fieldsKept")}
                 </span>
-                <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg" style={{ background: "rgba(255,59,48,0.1)", color: BM.danger }}>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 border border-rose-300 text-rose-800">
                   {hiddenFields.size} {t("fieldsRemoved")}
                 </span>
                 <div className="flex-1" />
-                <button onClick={() => setShowSaveTemplateDialog(true)}
-                  className="flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-lg transition-all"
-                  style={{ background: "rgba(59,130,246,0.15)", color: BM.accent, border: `1px solid ${BM.accentBorder}` }}>
+                <button
+                  type="button"
+                  onClick={() => setShowSaveTemplateDialog(true)}
+                  className="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all shadow-sm cursor-pointer"
+                >
                   <Save className="h-3 w-3" /> {t("saveTemplate")}
                 </button>
                 {hiddenFields.size > 0 && (
-                  <button onClick={restoreAllFields}
-                    className="flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-lg transition-all"
-                    style={{ background: "rgba(52,199,89,0.1)", color: BM.success, border: "1px solid rgba(52,199,89,0.25)" }}>
+                  <button
+                    type="button"
+                    onClick={restoreAllFields}
+                    className="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white transition-all shadow-sm cursor-pointer"
+                  >
                     <RefreshCw className="h-3 w-3" /> {t("restoreAll")}
                   </button>
                 )}
@@ -2250,33 +2378,37 @@ export default function WolfMoon({
 
               {/* Saved templates */}
               {savedFieldTemplates.length > 0 && (
-                <div className="px-5 py-3" style={{ borderBottom: `1px solid ${BM.cardBorder}` }}>
-                  <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: BM.textDim }}>
-                    <Layers className="h-3 w-3" /> {t("savedTemplates")} ({savedFieldTemplates.length})
+                <div className="px-2 py-2 border-b border-slate-200/70">
+                  <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5 text-slate-600">
+                    <Layers className="h-3 w-3 text-blue-600" /> {t("savedTemplates")} ({savedFieldTemplates.length})
                   </h4>
                   <div className="space-y-1.5">
                     {savedFieldTemplates.map(tmpl => (
-                      <div key={tmpl.id} className="flex items-center gap-2 p-2.5 rounded-lg"
-                        style={{ background: isClassic ? "#f9fafb" : isLegacy ? "rgba(255,255,255,0.5)" : "rgba(30,41,59,0.5)", border: `1px solid ${BM.cardBorder}` }}>
+                      <div
+                        key={tmpl.id}
+                        className="flex items-center gap-2 p-2 rounded-xl bg-white/80 border border-slate-200 text-slate-800 shadow-sm"
+                      >
                         <div className="flex-1 min-w-0">
-                          <div className="text-xs font-bold truncate" style={{ color: BM.text }}>{tmpl.name}</div>
-                          <div className="text-[10px] flex items-center gap-2" style={{ color: BM.textDim }}>
+                          <div className="text-xs font-bold truncate text-slate-900">{tmpl.name}</div>
+                          <div className="text-[10px] flex items-center gap-2 text-slate-500">
                             <span>{t("basedOn")}: {tmpl.baseTemplate}</span>
                             <span>•</span>
-                            <span style={{ color: BM.success }}>{tmpl.allFields.length - tmpl.hiddenFields.length} {t("fieldsKept")}</span>
-                            <span>•</span>
-                            <span style={{ color: BM.danger }}>{tmpl.hiddenFields.length} {t("fieldsRemoved")}</span>
+                            <span>{tmpl.hiddenFields.length} {t("fieldsRemoved")}</span>
                           </div>
                         </div>
-                        <button onClick={() => handleLoadFieldTemplate(tmpl)}
-                          className="text-[10px] font-bold px-2 py-1 rounded-md shrink-0 transition-all"
-                          style={{ background: "rgba(59,130,246,0.15)", color: BM.accent, border: `1px solid ${BM.accentBorder}` }}>
-                          {t("applyTemplate")}
+                        <button
+                          type="button"
+                          onClick={() => handleLoadFieldTemplate(tmpl)}
+                          className="px-2 py-1 rounded-lg text-[10px] font-bold bg-blue-100 hover:bg-blue-200 text-blue-800 cursor-pointer"
+                        >
+                          {t("apply")}
                         </button>
-                        <button onClick={() => handleDeleteFieldTemplate(tmpl.id)}
-                          className="p-1 rounded-md shrink-0 transition-all hover:opacity-70"
-                          style={{ color: BM.danger }}>
-                          <X className="h-3 w-3" />
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteFieldTemplate(tmpl.id)}
+                          className="p-1 rounded-lg text-rose-600 hover:bg-rose-100 cursor-pointer"
+                        >
+                          <Trash2 className="h-3 w-3" />
                         </button>
                       </div>
                     ))}
@@ -2284,36 +2416,12 @@ export default function WolfMoon({
                 </div>
               )}
 
-              {/* Hidden fields list */}
-              {hiddenFields.size > 0 ? (
-                <div className="px-5 py-3">
-                  <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: BM.textDim }}>
-                    <Eye className="h-3 w-3" /> {t("removedFields")} ({hiddenFields.size})
-                  </h4>
-                  <div className="space-y-1">
-                    {Array.from(hiddenFields).map(fieldKey => (
-                      <div key={fieldKey} className="flex items-center justify-between p-2 rounded-lg text-xs"
-                        style={{ background: isClassic ? "#f3f4f6" : isLegacy ? "rgba(255,255,255,0.4)" : "rgba(30,41,59,0.4)", border: `1px solid ${BM.cardBorder}` }}>
-                        <span className="font-mono truncate flex-1" style={{ color: BM.textDim }}>
-                          {fieldKey.replace("ontology:", "").replace("registry:", "").split("/").pop()}
-                        </span>
-                        <button onClick={() => restoreField(fieldKey)}
-                          className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold transition-all shrink-0"
-                          style={{ background: "rgba(52,199,89,0.1)", color: BM.success }}>
-                          <RefreshCw className="h-2.5 w-2.5" /> {t("restoreField")}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="px-5 py-6 text-center">
-                  <p className="text-xs" style={{ color: BM.textDim }}>{t("noHiddenFields")}</p>
-                  <p className="text-[10px] mt-1" style={{ color: BM.textDim }}>
-                    {language === "ar" ? "مرر الماوس فوق أي حقل واضغط ✕ لإخفائه" : "Hover over any field and click ✕ to hide it"}
-                  </p>
-                </div>
-              )}
+              {/* Instructions */}
+              <div className="px-2 py-3 text-center">
+                <p className="text-[11px] text-slate-600 leading-relaxed font-medium">
+                  {t("fieldCustomizationHelp")}
+                </p>
+              </div>
             </div>
           </motion.div>
         )}
@@ -2334,6 +2442,19 @@ export default function WolfMoon({
 
       {/* ===== DIALOGS ===== */}
       <AuthoritySearchDialog isOpen={showAuthoritySearch} onClose={() => setShowAuthoritySearch(false)} onSelect={handleAuthoritySelect} initialQuery="" />
+      
+      {/* Iraqi Authority Finder Modal */}
+      {showIraqiAuthorityModal && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-xl">
+          <div className="flex-1 overflow-auto">
+            <AuthorFinder 
+              onBack={() => setShowIraqiAuthorityModal(false)} 
+              onSelectAuthor={handleInsertIraqiAuthor} 
+            />
+          </div>
+        </div>
+      )}
+
       <ImportRecordDialog isOpen={showImportDialog} onClose={() => setShowImportDialog(false)} onImport={handleImport} />
       <RecordViewerDialog open={showRecordViewer} onOpenChange={setShowRecordViewer} jsonldData={graphJsonld || { "@graph": [] }} title={recordTitle} />
     </div>
