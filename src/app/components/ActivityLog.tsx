@@ -27,7 +27,8 @@ import {
   deleteRecord, 
   logActivity,
   approveRecord,
-  SavedRecord
+  SavedRecord,
+  getDeletedRecordIds
 } from '../utils/recordStorageBackend';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
@@ -106,9 +107,11 @@ export function ActivityLog({ onClose, onSelectRecord }: ActivityLogProps) {
     const entries: ActivityLogEntry[] = [];
 
     // 1. Fetch from moon_activity_log via storage backend
+    const deletedIds = getDeletedRecordIds();
     try {
       const storedLogs = getActivityLogs();
       storedLogs.forEach(log => {
+        if (deletedIds.has(log.recordId)) return;
         entries.push({
           id: log.id,
           timestamp: new Date(log.timestamp),

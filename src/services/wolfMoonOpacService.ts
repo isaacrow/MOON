@@ -18,7 +18,7 @@
 import { projectId, publicAnonKey } from '../../utils/supabase/info';
 import { AISuggestionProfile, saveAuthorityProfileToMoonSystem } from './authorFinderService';
 import { VERIFIED_IRAQI_AUTHORS } from './iraqiAuthorAIService';
-import { getAllRecords } from '../app/utils/recordStorageBackend';
+import { getAllRecords, getDeletedRecordIds } from '../app/utils/recordStorageBackend';
 import { realLocExamples } from '../app/utils/realLocExamples';
 
 // Curated library of high-resolution cultural & manuscript imagery for OPAC entities
@@ -1114,8 +1114,10 @@ class WolfMoonOpacService {
 
     // 2b. Load authentic BIBFRAME 2.0 works (including Al-Qabasat - Mir Damad with full WEMI connections)
     try {
+      const deletedIds = getDeletedRecordIds();
       if (Array.isArray(realLocExamples)) {
         for (const locEx of realLocExamples) {
+          if (deletedIds.has(locEx.id)) continue;
           const parsed = this.parseBibframeDocumentToOpacWork(locEx);
           if (parsed && !gatheredWorks.some(gw => gw.id === parsed.id || gw.title === parsed.title)) {
             parsed.source = 'national-authority';

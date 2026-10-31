@@ -41,6 +41,64 @@ export interface SavedRecord {
 
 const API_BASE = typeof window !== 'undefined' ? '/api' : 'http://localhost:8080';
 
+// Seed IDs that must never be auto-injected or resurrected if removed
+export const SEED_RECORD_IDS = new Set<string>([
+  '1984-orwell',
+  'pride-and-prejudice',
+  'al-qabasat-mir-damad',
+  'to-kill-mockingbird',
+  'great-gatsby'
+]);
+
+export const DELETED_RECORDS_KEY = 'moon_deleted_record_ids';
+
+export function getDeletedRecordIds(): Set<string> {
+  const deleted = new Set<string>(SEED_RECORD_IDS);
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem(DELETED_RECORDS_KEY);
+      if (stored) {
+        const arr = JSON.parse(stored);
+        if (Array.isArray(arr)) {
+          arr.forEach((id: string) => {
+            if (id) deleted.add(id);
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Error reading deleted records from localStorage:', e);
+    }
+  }
+  return deleted;
+}
+
+export function markRecordDeleted(id: string): void {
+  if (typeof window !== 'undefined') {
+    try {
+      const deleted = getDeletedRecordIds();
+      deleted.add(id);
+      localStorage.setItem(DELETED_RECORDS_KEY, JSON.stringify(Array.from(deleted)));
+    } catch (e) {
+      console.error('Error saving deleted record id:', e);
+    }
+  }
+}
+
+export function unmarkRecordDeleted(id: string): void {
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem(DELETED_RECORDS_KEY);
+      if (stored) {
+        const arr = JSON.parse(stored);
+        if (Array.isArray(arr)) {
+          const updated = arr.filter((x: string) => x !== id);
+          localStorage.setItem(DELETED_RECORDS_KEY, JSON.stringify(updated));
+        }
+      }
+    } catch {}
+  }
+}
+
 // Get access token from localStorage
 function getAccessToken(): string | null {
   const auth = localStorage.getItem('moon_auth');
@@ -225,6 +283,8 @@ export async function saveRecord(record: BIBFRAMERecord, cataloger?: string): Pr
     coverImage,
   };
 
+  unmarkRecordDeleted(savedRecord.id);
+
   try {
     // Build safe Work and Instance nodes - spread FIRST, defaults LAST
     const safeWork = buildSafeNode(
@@ -305,6 +365,7 @@ export async function saveRecord(record: BIBFRAMERecord, cataloger?: string): Pr
 }
 
 export async function getAllRecords(): Promise<SavedRecord[]> {
+  const deletedIds = getDeletedRecordIds();
   try {
     const response = await fetch(`${API_BASE}/records`, {
       headers: {
@@ -320,7 +381,9 @@ export async function getAllRecords(): Promise<SavedRecord[]> {
     const supabaseRecords = data.records || [];
     
     // Convert server format to SavedRecord format
-    const convertedRecords: SavedRecord[] = supabaseRecords.map((serverRecord: any) => {
+    const convertedRecords: SavedRecord[] = supabaseRecords
+      .filter((serverRecord: any) => serverRecord && !deletedIds.has(serverRecord.id))
+      .map((serverRecord: any) => {
       // Normalize @graph immediately - ONE structure everywhere
       const graph = serverRecord.document?.['@graph'] || serverRecord['@graph'];
       
@@ -502,14 +565,16 @@ export async function getAllRecords(): Promise<SavedRecord[]> {
       };
     });
     
-    // Merge with seed examples and local records so nothing is ever lost
-    const seedRecords = getSeedExamples();
+    // Merge with local records, excluding any deleted records
     const localRecords = getAllRecordsLocal();
     const recordMap = new Map<string, SavedRecord>();
 
-    seedRecords.forEach(r => recordMap.set(r.id, r));
-    localRecords.forEach(r => recordMap.set(r.id, r));
-    convertedRecords.forEach(r => recordMap.set(r.id, r));
+    localRecords.forEach(r => {
+      if (!deletedIds.has(r.id)) recordMap.set(r.id, r);
+    });
+    convertedRecords.forEach(r => {
+      if (!deletedIds.has(r.id)) recordMap.set(r.id, r);
+    });
 
     const finalRecords = Array.from(recordMap.values());
     finalRecords.sort((a, b) => {
@@ -524,7 +589,7 @@ export async function getAllRecords(): Promise<SavedRecord[]> {
       console.error('Error caching to localStorage:', e);
     }
     
-    console.log(`✅ Loaded ${finalRecords.length} total records (${convertedRecords.length} from Supabase, ${seedRecords.length} seeds)`);
+    console.log(`✅ Loaded ${finalRecords.length} total records (${convertedRecords.length} from Supabase)`);
     return finalRecords;
   } catch (error) {
     console.error('Error fetching records from Supabase, falling back to localStorage:', error);
@@ -533,38 +598,13 @@ export async function getAllRecords(): Promise<SavedRecord[]> {
 }
 
 function getSeedExamples(): SavedRecord[] {
-  return realLocExamples.map((ex) => ({
-    id: ex.id,
-    record: {
-      '@context': {
-        bf: 'http://id.loc.gov/ontologies/bibframe/',
-        bflc: 'http://id.loc.gov/ontologies/bflc/',
-        rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
-        rdfs: 'http://www.w3.org/2000/01/rdf-schema#',
-      },
-      work: ex.data.work,
-      instance: ex.data.instance,
-      metadata: {
-        catalogingLanguage: ex.id.includes('arabic') || ex.id.includes('qabasat') ? 'ara' : 'en',
-        descriptionConventions: 'rda',
-        catalogingInterface: 'Wolf Moon',
-        resourceType: ex.name.includes('مخطوط') ? 'Manuscript / مخطوط' : 'Monograph',
-      }
-    },
-    createdAt: new Date().toISOString(),
-    modifiedAt: new Date().toISOString(),
-    title: ex.name,
-    cataloger: 'IQ-KaCCS / العتبة العباسية',
-    resourceType: ex.name.includes('مخطوط') ? 'Manuscript / مخطوط' : 'Monograph'
-  }));
+  // Demo seeds should never be injected automatically into the database
+  return [];
 }
 
 export function getAllRecordsLocal(): SavedRecord[] {
-  const seeds = getSeedExamples();
+  const deletedIds = getDeletedRecordIds();
   const recordMap = new Map<string, SavedRecord>();
-
-  // Add all seeds first
-  seeds.forEach(s => recordMap.set(s.id, s));
 
   const stored = typeof window !== 'undefined' ? localStorage.getItem('bibframe_saved_records') : null;
   if (stored) {
@@ -572,22 +612,13 @@ export function getAllRecordsLocal(): SavedRecord[] {
       const records = JSON.parse(stored);
       if (Array.isArray(records)) {
         records.forEach((r: any) => {
-          if (r && r.id) {
+          if (r && r.id && !deletedIds.has(r.id)) {
             recordMap.set(r.id, r);
           }
         });
       }
     } catch (e) {
       console.error('Error parsing localStorage records:', e);
-    }
-  }
-
-  // Ensure al-qabasat has latest comprehensive 100% data
-  const qabasatExample = seeds.find(e => e.id === 'al-qabasat-mir-damad');
-  if (qabasatExample) {
-    const existing = recordMap.get('al-qabasat-mir-damad');
-    if (!existing || !existing.record?.work?.['bf:tableOfContents']) {
-      recordMap.set('al-qabasat-mir-damad', qabasatExample);
     }
   }
 
@@ -598,10 +629,24 @@ export function getAllRecordsLocal(): SavedRecord[] {
     return dateB - dateA;
   });
 
+  // Keep localStorage clean of deleted/seed records
+  if (typeof window !== 'undefined' && stored) {
+    try {
+      const rawRecords = JSON.parse(stored);
+      if (Array.isArray(rawRecords) && rawRecords.some((r: any) => deletedIds.has(r?.id))) {
+        localStorage.setItem('bibframe_saved_records', JSON.stringify(allRecords));
+      }
+    } catch {}
+  }
+
   return allRecords;
 }
 
 export async function getRecordById(id: string): Promise<SavedRecord | null> {
+  const deletedIds = getDeletedRecordIds();
+  if (deletedIds.has(id)) {
+    return null;
+  }
   try {
     const response = await fetch(`${API_BASE}/records/${id}`, {
       headers: {
@@ -726,6 +771,24 @@ export async function getRecordById(id: string): Promise<SavedRecord | null> {
 }
 
 export async function deleteRecord(id: string): Promise<void> {
+  markRecordDeleted(id);
+
+  // Directly clean localStorage cache without re-seeding
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem('bibframe_saved_records');
+      if (stored) {
+        const records = JSON.parse(stored);
+        if (Array.isArray(records)) {
+          const filtered = records.filter((r: any) => r && r.id !== id);
+          localStorage.setItem('bibframe_saved_records', JSON.stringify(filtered));
+        }
+      }
+    } catch (e) {
+      console.error('Error updating localStorage on delete:', e);
+    }
+  }
+
   try {
     const response = await fetch(`${API_BASE}/records/${id}`, {
       method: 'DELETE',
@@ -735,25 +798,17 @@ export async function deleteRecord(id: string): Promise<void> {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to delete record: ${response.statusText}`);
+      console.warn(`Server responded with ${response.status} when deleting record ${id}`);
+    } else {
+      console.log(`✅ Deleted record ${id} from Supabase`);
     }
-    
-    console.log(`✅ Deleted record ${id} from Supabase`);
-    
-    // Also delete from localStorage cache
-    const records = getAllRecordsLocal();
-    const filtered = records.filter((r) => r.id !== id);
-    localStorage.setItem('bibframe_saved_records', JSON.stringify(filtered));
   } catch (error) {
     console.error('Error deleting record from Supabase:', error);
-    // Still try to delete from localStorage
-    const records = getAllRecordsLocal();
-    const filtered = records.filter((r) => r.id !== id);
-    localStorage.setItem('bibframe_saved_records', JSON.stringify(filtered));
   }
 }
 
 export async function updateRecord(id: string, record: BIBFRAMERecord, cataloger?: string): Promise<SavedRecord | null> {
+  unmarkRecordDeleted(id);
   // Enhanced title extraction
   let title = 'Untitled Record';
   const instanceTitle = record.instance['bf:title'];
