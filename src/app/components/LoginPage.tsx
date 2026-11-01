@@ -39,7 +39,18 @@ interface LoginPageProps {
 export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps) {
   const isAr = currentLanguage === "ar";
   const { t } = useTranslation();
-  const { login, signup, getUsers, approveUser, rejectUser, deleteUser, pendingCount } = useAuth();
+  const {
+    login,
+    signup,
+    users: adminUsers,
+    usersLoading,
+    usersError,
+    refreshUsers,
+    unlockAdmin,
+    approveUser,
+    rejectUser,
+    deleteUser,
+  } = useAuth();
 
   // Login State
   const [identifier, setIdentifier] = useState('');
@@ -69,46 +80,53 @@ export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps)
   const [adminPasscode, setAdminPasscode] = useState('');
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
   const [adminError, setAdminError] = useState('');
-  const [adminUsers, setAdminUsers] = useState<AuthUser[]>([]);
+  const [adminUnlocking, setAdminUnlocking] = useState(false);
+  const [busyUser, setBusyUser] = useState<string | null>(null);
 
   // UI State
   const [isUiVisible, setIsUiVisible] = useState(true);
 
   const refreshAdminUsers = () => {
-    setAdminUsers(getUsers());
+    setAdminError('');
+    refreshUsers();
   };
 
   useEffect(() => {
     if (showAdminModal && isAdminUnlocked) {
-      refreshAdminUsers();
+      refreshUsers();
     }
-  }, [showAdminModal, isAdminUnlocked]);
+  }, [showAdminModal, isAdminUnlocked, refreshUsers]);
 
-  const handleAdminUnlock = (e: React.FormEvent) => {
+  const handleAdminUnlock = async (e: React.FormEvent) => {
     e.preventDefault();
     setAdminError('');
-    const code = adminPasscode.trim();
-    if (code === 'Eshak1996' || code.toLowerCase() === 'isaac') {
+    setAdminUnlocking(true);
+    const res = await unlockAdmin(adminPasscode);
+    setAdminUnlocking(false);
+    if (res.success) {
       setIsAdminUnlocked(true);
-      setAdminUsers(getUsers());
+      setAdminPasscode('');
     } else {
-      setAdminError('Invalid Super Admin credentials. Only Isaac Faleh can approve testers.');
+      setAdminError(res.message || 'Invalid Super Admin credentials. Only Isaac Faleh can approve testers.');
     }
   };
 
-  const handleApproveTester = (username: string) => {
-    approveUser(username);
-    refreshAdminUsers();
+  const runAdminAction = async (
+    action: (username: string) => Promise<{ success: boolean; message?: string }>,
+    username: string
+  ) => {
+    setAdminError('');
+    setBusyUser(username);
+    const res = await action(username);
+    setBusyUser(null);
+    if (!res.success) setAdminError(res.message || 'Action failed. Please try again.');
   };
 
-  const handleRejectTester = (username: string) => {
-    rejectUser(username);
-    refreshAdminUsers();
-  };
-
+  const handleApproveTester = (username: string) => runAdminAction(approveUser, username);
+  const handleRejectTester = (username: string) => runAdminAction(rejectUser, username);
   const handleDeleteTester = (username: string) => {
-    deleteUser(username);
-    refreshAdminUsers();
+    if (!window.confirm(`Delete the account "${username}"? This cannot be undone.`)) return;
+    runAdminAction(deleteUser, username);
   };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -747,7 +765,7 @@ export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps)
                         type="password"
                         value={adminPasscode}
                         onChange={(e) => setAdminPasscode(e.target.value)}
-                        placeholder="Enter Super Admin password (Eshak1996)"
+                        placeholder="Enter Super Admin password"
                         className="bg-black/50 border-white/20 text-white text-center text-base tracking-widest h-12 rounded-xl"
                         autoFocus
                       />
@@ -755,9 +773,10 @@ export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps)
                     {adminError && <p className="text-xs text-rose-400">{adminError}</p>}
                     <Button
                       type="submit"
+                      disabled={adminUnlocking || !adminPasscode}
                       className="w-full h-11 bg-amber-500 hover:bg-amber-400 text-black font-bold uppercase rounded-xl cursor-pointer"
                     >
-                      Unlock Approval Center
+                      {adminUnlocking ? 'Verifying…' : 'Unlock Approval Center'}
                     </Button>
                   </form>
                 ) : (
@@ -777,11 +796,18 @@ export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps)
                         size="sm"
                         variant="outline"
                         onClick={refreshAdminUsers}
+                        disabled={usersLoading}
                         className="text-xs bg-white/5 border-white/20 text-white hover:bg-white/10"
                       >
-                        Refresh List
+                        {usersLoading ? 'Refreshing…' : 'Refresh List'}
                       </Button>
                     </div>
+
+                    {(adminError || usersError) && (
+                      <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/25 rounded-xl px-3 py-2">
+                        {adminError || usersError}
+                      </p>
+                    )}
 
                     {/* Users List */}
                     <div className="space-y-3">
@@ -837,7 +863,9 @@ export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps)
                             </div>
 
                             {/* Actions */}
-                            <div className="flex items-center gap-2 shrink-0">
+                            <div
+                              className={`flex items-center gap-2 shrink-0 ${busyUser === u.username ? 'opacity-50 pointer-events-none' : ''}`}
+                            >
                               {isPending ? (
                                 <>
                                   <Button
@@ -865,6 +893,16 @@ export function LoginPage({ onLanguageChange, currentLanguage }: LoginPageProps)
                                   className="bg-emerald-600/80 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl h-8 px-3 cursor-pointer"
                                 >
                                   Re-Approve
+                                </Button>
+                              ) : u.role !== 'admin' ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleRejectTester(u.username)}
+                                  className="border-rose-500/40 text-rose-300 hover:bg-rose-500/20 text-xs rounded-xl h-8 px-3 cursor-pointer"
+                                  title="Revoke access"
+                                >
+                                  Revoke
                                 </Button>
                               ) : null}
 

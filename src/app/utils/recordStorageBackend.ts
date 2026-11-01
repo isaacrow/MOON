@@ -12,8 +12,10 @@
  * All operations automatically sync to Supabase and cache locally.
  */
 import { BIBFRAMERecord } from '../types/bibframe';
-import { projectId, publicAnonKey } from '../../../utils/supabase/info';
+import { MOON_API, moonHeaders, moonFetch } from './moonApi';
 import { realLocExamples } from './realLocExamples';
+
+export type RecordStatus = 'complete' | 'pending-review' | 'needs-review';
 
 export interface SavedRecord {
   id: string;
@@ -24,7 +26,7 @@ export interface SavedRecord {
   cataloger?: string;
   resourceType?: string;
   coverImage?: string;
-  status?: 'complete' | 'pending-review' | 'needs-review';
+  status?: RecordStatus;
   approvedBy?: string;
   approvedAt?: string;
   jcricket?: {
@@ -39,7 +41,13 @@ export interface SavedRecord {
   };
 }
 
-const API_BASE = typeof window !== 'undefined' ? '/api' : 'http://localhost:8080';
+// Records live in the Supabase edge function so every user and the Super Admin
+// share one catalog (the site itself is static and has no /api backend).
+const API_BASE = MOON_API;
+
+function normalizeStatus(value: unknown): RecordStatus {
+  return value === 'pending-review' || value === 'needs-review' ? value : 'complete';
+}
 
 // Seed IDs that must never be auto-injected or resurrected if removed
 export const SEED_RECORD_IDS = new Set<string>([
@@ -281,6 +289,8 @@ export async function saveRecord(record: BIBFRAMERecord, cataloger?: string): Pr
     cataloger,
     resourceType,
     coverImage,
+    // Provisional; the server decides the real status from the user's session.
+    status: normalizeStatus(record.metadata?.status),
   };
 
   unmarkRecordDeleted(savedRecord.id);
@@ -313,15 +323,13 @@ export async function saveRecord(record: BIBFRAMERecord, cataloger?: string): Pr
     
     const response = await fetch(`${API_BASE}/records/save`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${publicAnonKey}`,
-      },
+      headers: moonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         id: savedRecord.id,
         document: jsonldDocument,
         title: savedRecord.title,
-        metadata: record.metadata || {},
+        metadata: { ...(record.metadata || {}), cataloger },
+        status: savedRecord.status,
       }),
     });
 
@@ -333,6 +341,13 @@ export async function saveRecord(record: BIBFRAMERecord, cataloger?: string): Pr
 
     const data = await response.json();
     console.log('✅ Record saved to Supabase:', data);
+    if (data?.status) {
+      savedRecord.status = normalizeStatus(data.status);
+      savedRecord.record = {
+        ...savedRecord.record,
+        metadata: { ...savedRecord.record.metadata, status: savedRecord.status } as any,
+      };
+    }
     
     // Also save to localStorage as a cache
     try {
@@ -368,9 +383,7 @@ export async function getAllRecords(): Promise<SavedRecord[]> {
   const deletedIds = getDeletedRecordIds();
   try {
     const response = await fetch(`${API_BASE}/records`, {
-      headers: {
-        'Authorization': `Bearer ${publicAnonKey}`,
-      },
+      headers: moonHeaders(),
     });
 
     if (!response.ok) {
@@ -530,6 +543,8 @@ export async function getAllRecords(): Promise<SavedRecord[]> {
         title = String(work['rdfs:label']);
       }
       
+      const status = normalizeStatus(serverRecord.status || serverRecord.metadata?.status);
+
       // CRITICAL FIX: Convert @graph format to work/instance format
       const convertedRecord: BIBFRAMERecord = {
         '@context': serverRecord.document?.['@context'] || {
@@ -550,18 +565,22 @@ export async function getAllRecords(): Promise<SavedRecord[]> {
           ontologyVersion: serverRecord.metadata?.ontologyVersion,
           createdAt: serverRecord.metadata?.createdAt,
           catalogerId: serverRecord.metadata?.catalogerId,
-        }
+          status,
+        } as any
       };
-      
+
       return {
         id: serverRecord.id,
         // Store the converted work/instance format
         record: convertedRecord,
         title: title,
-        createdAt: serverRecord.saved || serverRecord.metadata?.createdAt || new Date().toISOString(),
+        createdAt: serverRecord.createdAt || serverRecord.metadata?.createdAt || serverRecord.saved || new Date().toISOString(),
         modifiedAt: serverRecord.saved || serverRecord.metadata?.modifiedAt || new Date().toISOString(),
-        cataloger: serverRecord.metadata?.cataloger,
+        cataloger: serverRecord.cataloger || serverRecord.metadata?.cataloger || serverRecord.metadata?.catalogerId,
         resourceType: serverRecord.metadata?.resourceType,
+        status,
+        approvedBy: serverRecord.approvedBy,
+        approvedAt: serverRecord.approvedAt,
       };
     });
     
@@ -648,10 +667,8 @@ export async function getRecordById(id: string): Promise<SavedRecord | null> {
     return null;
   }
   try {
-    const response = await fetch(`${API_BASE}/records/${id}`, {
-      headers: {
-        'Authorization': `Bearer ${publicAnonKey}`,
-      },
+    const response = await fetch(`${API_BASE}/records/${encodeURIComponent(id)}`, {
+      headers: moonHeaders(),
     });
 
     if (!response.ok) {
@@ -755,9 +772,13 @@ export async function getRecordById(id: string): Promise<SavedRecord | null> {
     const savedRecord: SavedRecord = {
       id: serverRecord.id,
       record: convertedRecord,
-      createdAt: serverRecord.saved,
+      createdAt: serverRecord.createdAt || serverRecord.saved,
       modifiedAt: serverRecord.saved,
       title,
+      cataloger: serverRecord.cataloger || serverRecord.metadata?.catalogerId,
+      status: normalizeStatus(serverRecord.status || serverRecord.metadata?.status),
+      approvedBy: serverRecord.approvedBy,
+      approvedAt: serverRecord.approvedAt,
     };
     
     console.log(`✅ Loaded record ${id} from Supabase`);
@@ -790,11 +811,9 @@ export async function deleteRecord(id: string): Promise<void> {
   }
 
   try {
-    const response = await fetch(`${API_BASE}/records/${id}`, {
+    const response = await fetch(`${API_BASE}/records/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${publicAnonKey}`,
-      },
+      headers: moonHeaders(),
     });
 
     if (!response.ok) {
@@ -852,19 +871,21 @@ export async function updateRecord(id: string, record: BIBFRAMERecord, cataloger
     }
   }
 
+  const previous = getAllRecordsLocal().find((r) => r.id === id);
+
   try {
-    // First delete the old record, then save the new one
-    await deleteRecord(id);
-    
+    // records/save upserts by id, so no delete is needed (deleting first used to
+    // mark the id as deleted locally and make the edited record vanish).
     const updatedRecord: SavedRecord = {
       id,
       record,
-      createdAt: new Date().toISOString(),
+      createdAt: previous?.createdAt || new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
       title,
       cataloger,
       resourceType,
       coverImage,
+      status: normalizeStatus(record.metadata?.status),
     };
     
     // Build safe Work and Instance nodes - spread FIRST, defaults LAST
@@ -888,13 +909,13 @@ export async function updateRecord(id: string, record: BIBFRAMERecord, cataloger
     
     const response = await fetch(`${API_BASE}/records/save`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${publicAnonKey}`,
-      },
+      headers: moonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         id,
-        document: jsonldDocument
+        document: jsonldDocument,
+        title,
+        metadata: { ...(record.metadata || {}), cataloger },
+        status: updatedRecord.status,
       }),
     });
 
@@ -902,7 +923,9 @@ export async function updateRecord(id: string, record: BIBFRAMERecord, cataloger
       throw new Error(`Failed to update record: ${response.statusText}`);
     }
 
-    console.log(`✅ Updated record ${id} in Supabase`);
+    const data = await response.json().catch(() => ({}));
+    if (data?.status) updatedRecord.status = normalizeStatus(data.status);
+    console.log(`✅ Updated record ${id} in Supabase (${updatedRecord.status})`);
     
     // Also update localStorage cache
     const records = getAllRecordsLocal();
@@ -995,6 +1018,26 @@ export function getActivityLogs(): ActivityLogItem[] {
  * Approve a pending record (Super Admin action)
  */
 export async function approveRecord(id: string, approverName: string = 'Super Admin'): Promise<SavedRecord | null> {
+  // The server is the source of truth; it checks the Super Admin session.
+  let approvedAt = new Date().toISOString();
+  try {
+    const { ok, status, data } = await moonFetch(`/records/${encodeURIComponent(id)}/approve`, { body: {} });
+    if (!ok || !data?.success) {
+      throw new Error(
+        status === 403
+          ? 'Your Super Admin session has expired. Please sign out and sign in again.'
+          : data?.error || `Server returned ${status}`
+      );
+    }
+    approvedAt = data.approvedAt || approvedAt;
+    approverName = data.approvedBy || approverName;
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error('Could not reach the Moon server. Please check your connection and try again.');
+    }
+    throw error;
+  }
+
   const records = getAllRecordsLocal();
   const index = records.findIndex(r => r.id === id);
   if (index === -1) return null;
@@ -1003,16 +1046,16 @@ export async function approveRecord(id: string, approverName: string = 'Super Ad
     ...records[index],
     status: 'complete',
     approvedBy: approverName,
-    approvedAt: new Date().toISOString(),
-    modifiedAt: new Date().toISOString(),
+    approvedAt,
+    modifiedAt: approvedAt,
     record: {
       ...records[index].record,
       metadata: {
         ...records[index].record?.metadata,
         status: 'complete',
         approvedBy: approverName,
-        approvedAt: new Date().toISOString(),
-      }
+        approvedAt,
+      } as any
     }
   };
 

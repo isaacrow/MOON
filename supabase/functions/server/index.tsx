@@ -27,6 +27,7 @@ import * as jwtAuth from "./jwtAuth.tsx";
 import * as observability from "./observability.tsx";
 import * as loadTesting from "./loadTesting.tsx";
 import recordRoutes from "./recordRoutes.tsx";
+import accountRoutes, { getSession, isAdminSession } from "./accountRoutes.tsx";
 import * as aiEngine from "./aiEngine.tsx";
 import * as aiRouter from "./aiRouter.tsx";
 import * as ld4 from "./ld4Integration.tsx";
@@ -94,7 +95,7 @@ app.use(
   "/*",
   cors({
     origin: "*",
-    allowHeaders: ["Content-Type", "Authorization"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Moon-Session"],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     exposeHeaders: ["Content-Length"],
     maxAge: 600,
@@ -578,35 +579,56 @@ app.post("/make-server-49c0e13c/authority/clear-cache", (c) => {
 // 💾 Save BIBFRAME Record (full JSON-LD document)
 app.post("/make-server-49c0e13c/records/save", async (c) => {
   try {
-    const { id, document, title, metadata } = await c.req.json();
-    
+    const { id, document, title, metadata, status: requestedStatus } = await c.req.json();
+
     if (!id || !document) {
       return c.json({ error: 'Record ID and document required' }, 400);
     }
-    
+
     // Validate it's a proper JSON-LD document
     if (!document['@graph'] || !Array.isArray(document['@graph'])) {
       return c.json({ error: 'Invalid JSON-LD document: @graph array required' }, 400);
     }
-    
-    // Store entire document as JSON-LD with metadata
+
+    // Review workflow: only the Super Admin can publish straight to the catalog.
+    // Everyone else's saves (new records and edits) wait for approval.
+    const session = await getSession(c);
+    const isAdmin = session?.role === 'admin';
+    const status = isAdmin
+      ? (requestedStatus === 'pending-review' ? 'pending-review' : 'complete')
+      : 'pending-review';
+
     const recordKey = `bibframe:record:${id}`;
+    const existingRaw = await kv.get(recordKey);
+    const existing = existingRaw ? (typeof existingRaw === 'string' ? JSON.parse(existingRaw) : existingRaw) : null;
+    const now = new Date().toISOString();
+    const cataloger = session?.username || metadata?.catalogerId || existing?.cataloger || 'anonymous';
+
+    // Store entire document as JSON-LD with metadata
     await kv.set(recordKey, JSON.stringify({
       id,
-      title: title || 'Untitled',
+      title: title || existing?.title || 'Untitled',
       document,
-      metadata: metadata || {},
-      saved: new Date().toISOString(),
+      metadata: { ...(existing?.metadata || {}), ...(metadata || {}), status },
+      status,
+      cataloger,
+      createdAt: existing?.createdAt || existing?.saved || now,
+      ...(status === 'complete'
+        ? { approvedBy: isAdmin ? session!.username : existing?.approvedBy, approvedAt: now }
+        : {}),
+      saved: now,
     }));
-    
-    console.log(`[RECORDS] Saved record ${id} "${title || 'Untitled'}" with ${document['@graph'].length} nodes`);
-    
-    return c.json({ 
-      success: true, 
+
+    console.log(`[RECORDS] Saved record ${id} "${title || 'Untitled'}" (${status}) by ${cataloger} with ${document['@graph'].length} nodes`);
+
+    return c.json({
+      success: true,
       id,
       title: title || 'Untitled',
+      status,
+      cataloger,
       nodeCount: document['@graph'].length,
-      saved: new Date().toISOString(),
+      saved: now,
     });
   } catch (error) {
     console.error('Save record error:', error);
@@ -648,6 +670,12 @@ app.get("/make-server-49c0e13c/records", async (c) => {
         title: record.title || 'Untitled',
         document: record.document,
         metadata: record.metadata,
+        // Records saved before the review workflow existed are treated as published.
+        status: record.status || record.metadata?.status || 'complete',
+        cataloger: record.cataloger || record.metadata?.catalogerId,
+        approvedBy: record.approvedBy,
+        approvedAt: record.approvedAt,
+        createdAt: record.createdAt || record.saved,
         saved: record.saved,
         nodeCount: record.document?.['@graph']?.length || 0,
       };
@@ -664,6 +692,47 @@ app.get("/make-server-49c0e13c/records", async (c) => {
     return c.json({ error: 'Failed to list records' }, 500);
   }
 });
+
+// ✅ Approve / reject a pending record (Super Admin only)
+async function reviewRecord(c: any, decision: 'complete' | 'needs-review') {
+  try {
+    const admin = await isAdminSession(c);
+    if (!admin) {
+      return c.json({ success: false, error: 'Super Admin session required' }, 403);
+    }
+    const id = c.req.param('id');
+    const recordKey = `bibframe:record:${id}`;
+    const raw = await kv.get(recordKey);
+    if (!raw) {
+      return c.json({ success: false, error: 'Record not found' }, 404);
+    }
+    const record = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const now = new Date().toISOString();
+    record.status = decision;
+    record.metadata = { ...(record.metadata || {}), status: decision };
+    record.reviewedBy = admin.username;
+    record.reviewedAt = now;
+    if (decision === 'complete') {
+      record.approvedBy = admin.username;
+      record.approvedAt = now;
+    }
+    await kv.set(recordKey, JSON.stringify(record));
+    console.log(`[RECORDS] ${admin.username} set record ${id} -> ${decision}`);
+    return c.json({
+      success: true,
+      id,
+      status: decision,
+      approvedBy: record.approvedBy,
+      approvedAt: record.approvedAt,
+    });
+  } catch (error) {
+    console.error('Review record error:', error);
+    return c.json({ success: false, error: 'Failed to update record status' }, 500);
+  }
+}
+
+app.post("/make-server-49c0e13c/records/:id/approve", (c) => reviewRecord(c, 'complete'));
+app.post("/make-server-49c0e13c/records/:id/reject", (c) => reviewRecord(c, 'needs-review'));
 
 // 🗑️ Delete Record
 app.delete("/make-server-49c0e13c/records/:id", async (c) => {
@@ -3842,6 +3911,7 @@ app.delete("/make-server-49c0e13c/test/cleanup",
 // 📚 RECORD LIFECYCLE API (V2)
 // ═══════════════════════════════════════════════════════════
 app.route('/make-server-49c0e13c', recordRoutes);
+app.route('/make-server-49c0e13c', accountRoutes);
 
 // ═══════════════════════════════════════════════════════════
 // 🌐 OPEN LINKED DATA — Content Negotiation & Public Endpoints

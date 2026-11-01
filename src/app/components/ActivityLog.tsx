@@ -23,8 +23,9 @@ import {
 import { ScrollArea } from './ui/scroll-area';
 import { 
   getActivityLogs, 
-  getAllRecordsLocal, 
-  deleteRecord, 
+  getAllRecords,
+  getAllRecordsLocal,
+  deleteRecord,
   logActivity,
   approveRecord,
   SavedRecord,
@@ -102,12 +103,20 @@ export function ActivityLog({ onClose, onSelectRecord }: ActivityLogProps) {
   const username = user?.username?.toLowerCase() || '';
   const isAuthorized = username === 'isaac' || isSuperAdmin || username === 'admin';
 
-  const loadActivities = () => {
+  const loadActivities = async () => {
     setIsLoading(true);
     const entries: ActivityLogEntry[] = [];
 
+    // Pull the shared catalog first so records submitted from other browsers show up.
+    try {
+      await getAllRecords();
+    } catch (err) {
+      console.warn('Could not refresh records from server:', err);
+    }
+
     // 1. Fetch from moon_activity_log via storage backend
     const deletedIds = getDeletedRecordIds();
+    const currentStatus = new Map(getAllRecordsLocal().map(r => [r.id, r.status || 'complete']));
     try {
       const storedLogs = getActivityLogs();
       storedLogs.forEach(log => {
@@ -120,6 +129,7 @@ export function ActivityLog({ onClose, onSelectRecord }: ActivityLogProps) {
           recordId: log.recordId,
           recordTitle: log.recordTitle,
           details: log.details || 'Audit event',
+          status: currentStatus.get(log.recordId),
         });
       });
     } catch (err) {
@@ -187,7 +197,9 @@ export function ActivityLog({ onClose, onSelectRecord }: ActivityLogProps) {
       toast.success(`Record "${recordTitle}" approved and published!`);
       loadActivities();
     } catch (err) {
-      toast.error('Failed to approve record');
+      toast.error('Failed to approve record', {
+        description: err instanceof Error ? err.message : undefined,
+      });
     }
   };
 
@@ -420,7 +432,9 @@ export function ActivityLog({ onClose, onSelectRecord }: ActivityLogProps) {
               <div className="space-y-3">
                 {filteredActivities.map((activity) => {
                   const Icon = ACTION_ICONS[activity.action] || Plus;
-                  const isPending = activity.details?.toLowerCase().includes('pending-review') || activity.status === 'pending-review';
+                  const isPending = activity.status
+                    ? activity.status === 'pending-review'
+                    : !!activity.details?.toLowerCase().includes('pending-review');
 
                   return (
                     <div 
