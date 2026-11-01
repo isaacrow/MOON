@@ -339,7 +339,7 @@ export default function WolfMoon({
 
   // ===== GLASS THEME =====
   // ===== 3D BACKGROUND TOGGLE =====
-  type StudioBgColor = "black" | "gray" | "white";
+  type StudioBgColor = "black" | "gray";
   const [show3dBackground, setShow3dBackground] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem("moon_wolf_3d_bg");
@@ -352,7 +352,7 @@ export default function WolfMoon({
   const [studioBgColor, setStudioBgColor] = useState<StudioBgColor>(() => {
     try {
       const stored = localStorage.getItem("moon_wolf_bg_color") as StudioBgColor;
-      if (stored === "black" || stored === "gray" || stored === "white") return stored;
+      if (stored === "black" || stored === "gray") return stored;
       return "black";
     } catch {
       return "black";
@@ -374,7 +374,7 @@ export default function WolfMoon({
   const gradientClass = glassTheme === "legacy" ? "animated-gradient-bg" : glassTheme === "classic" ? "" : "animated-gradient-bg-blue";
   const isLegacy = glassTheme === "legacy";
   const isClassic = glassTheme === "classic";
-  const isLight = isLegacy || isClassic || (!show3dBackground && studioBgColor === "white"); // any light theme
+  const isLight = isLegacy || isClassic; // any light theme
   const hasGlass = isLegacy; // only legacy uses frosted glass blur
   const glassElBg = isClassic ? "#f9fafb" : isLegacy ? "rgba(255,255,255,0.6)" : "rgba(30,41,59,0.5)";
   const glassElBorder = isClassic ? "1px solid #e5e7eb" : isLegacy ? "1px solid rgba(255,255,255,0.5)" : "1px solid rgba(59,130,246,0.08)";
@@ -1246,9 +1246,7 @@ export default function WolfMoon({
         <div
           className="fixed inset-0 z-0 pointer-events-none transition-colors duration-300"
           style={{
-            background: studioBgColor === "white"
-              ? "#ffffff"
-              : studioBgColor === "gray"
+            background: studioBgColor === "gray"
               ? "#666666"
               : "#000000",
           }}
@@ -1262,44 +1260,42 @@ export default function WolfMoon({
         className="relative z-20 px-6 pt-3 pb-4 glass-luxury-panel m-3 mb-0 rounded-2xl"
       >
         {/* ===== ROW 1: BRANDING (LEFT) — DYNAMIC NOTCH (CENTER) — FINDER & CONTROLS (RIGHT) ===== */}
-        <div className="relative max-w-7xl mx-auto flex items-center justify-between gap-3 -mt-3 mb-3 min-h-[44px]">
-          {/* Blue Circle (Left): Back Button & MOON Studio Logo */}
-          <div className="flex items-center gap-3 shrink-0 z-10">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] items-center gap-2.5 -mt-3 mb-2.5">
+          {/* Left: Back Button & MOON Studio Logo */}
+          <div className="flex items-center justify-start gap-2.5 shrink-0">
             {onBack && (
               <button
                 type="button"
                 onClick={onBack}
-                className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white cursor-pointer shadow-xl"
+                className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white cursor-pointer shadow-xl shrink-0"
                 title="Return to Dashboard"
               >
                 <Home className="h-3.5 w-3.5 text-white drop-shadow" />
                 <span className="text-xs font-bold">{t("back") || "Dashboard"}</span>
               </button>
             )}
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2 shrink-0">
               <div className="relative flex items-center justify-center">
-                <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-8 w-auto object-contain drop-shadow-lg" />
+                <img src={moonLogoWhite} alt="Moon Logo" className="h-7 w-auto object-contain drop-shadow-lg" />
               </div>
-              <div>
-                <h1 className="text-base font-black tracking-tight flex items-center gap-1.5 text-white">
-                  <span>MOON</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 border border-white/30 text-white font-bold uppercase tracking-wider">
-                    Studio
-                  </span>
-                </h1>
-              </div>
+              <h1 className="text-base font-black tracking-tight flex items-center gap-1.5 text-white">
+                <span>MOON</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 border border-white/30 text-white font-bold uppercase tracking-wider">
+                  Studio
+                </span>
+              </h1>
             </div>
           </div>
 
-          {/* Green Circle (Center): The Dynamic Notch - Perfectly Centered */}
-          <div className="hidden lg:flex absolute left-1/2 -translate-x-1/2 top-0 justify-center pointer-events-auto z-20">
+          {/* Center: The Dynamic Notch (True Centered in Column 2, will NEVER collide) */}
+          <div className="flex justify-center shrink-0">
             <div
-              className="liquid-glass-notch flex items-center gap-3 px-4 py-1.5 transition-all shadow-2xl"
+              className="liquid-glass-notch flex items-center gap-2 px-3 py-1 transition-all shadow-2xl"
             >
               {/* Institutional Score Badge */}
               {institutionalValidation && (
                 <div
-                  className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-black transition-all"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black transition-all shrink-0"
                   style={{
                     background: institutionalValidation.score >= 85 ? "rgba(52, 211, 153, 0.22)" : institutionalValidation.score >= 50 ? "rgba(251, 191, 36, 0.22)" : "rgba(248, 113, 113, 0.22)",
                     color: institutionalValidation.score >= 85 ? "#34d399" : institutionalValidation.score >= 50 ? "#fbbf24" : "#f87171",
@@ -1312,10 +1308,10 @@ export default function WolfMoon({
               )}
 
               {/* Vertical Divider */}
-              <div className="h-3.5 w-px bg-white/25" />
+              <div className="h-3 w-px bg-white/25 shrink-0" />
 
               {/* Live Graph Metrics */}
-              <div className="flex items-center gap-1.5 flex-nowrap">
+              <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
                 {[
                   { icon: <Database className="h-3 w-3 text-cyan-300" />, label: `${graphStats.nodeCount} ${t("nodes")}` },
                   { icon: <Network className="h-3 w-3 text-purple-300" />, label: `${tripleCount} ${t("triples")}` },
@@ -1328,7 +1324,7 @@ export default function WolfMoon({
                 ].map((stat, i) => (
                   <span
                     key={i}
-                    className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold transition-all"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold transition-all shrink-0"
                     style={{
                       background: 'rgba(255, 255, 255, 0.12)',
                       border: '1px solid rgba(255, 255, 255, 0.22)',
@@ -1343,67 +1339,50 @@ export default function WolfMoon({
             </div>
           </div>
 
-          {/* Red Circle (Right): Iraqi Authority Finder + 3D Toggle + Language Toggle */}
-          <div className="flex items-center justify-end gap-1.5 shrink-0 z-10">
+          {/* Right: Iraqi Authority Finder + 3D Toggle + Background Toggle (Black/Gray only) + Language Toggle */}
+          <div className="flex items-center justify-end gap-1.5 shrink-0">
             <button
               type="button"
               onClick={() => setShowIraqiAuthorityModal(true)}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3 py-1.5 text-xs font-black text-white cursor-pointer shadow-xl"
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3 py-1.5 text-xs font-black text-white cursor-pointer shadow-xl shrink-0"
             >
-              <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-3.5 w-auto object-contain drop-shadow" />
-              <span>IQ Iraqi Authority Finder</span>
+              <img src={moonLogoWhite} alt="Moon Logo" className="h-3.5 w-auto object-contain drop-shadow" />
+              <span>IQ Authority Finder</span>
             </button>
             <button
               type="button"
               onClick={toggle3dBackground}
-              className={`glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold cursor-pointer ${show3dBackground ? 'text-cyan-300' : 'text-white/60'}`}
+              className={`glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold cursor-pointer shrink-0 ${show3dBackground ? 'text-cyan-300' : 'text-white/60'}`}
               title={show3dBackground ? (language === "ar" ? "إيقاف الخلفية ثلاثية الأبعاد (3D)" : "Turn 3D background OFF") : (language === "ar" ? "تشغيل الخلفية ثلاثية الأبعاد (3D)" : "Turn 3D background ON")}
             >
               <Box className={`h-3.5 w-3.5 ${show3dBackground ? 'text-cyan-300' : 'text-white/40'}`} />
               <span>{show3dBackground ? (language === "ar" ? "3D مفعّل" : "3D ON") : (language === "ar" ? "3D معطّل" : "3D OFF")}</span>
             </button>
 
-            {/* Background Color Swatches (When 3D is OFF: Black #000000, Gray #666666, White #FFFFFF) */}
+            {/* Background Color Toggle (When 3D is OFF: Only Black #000000 & Gray #666666, White Removed) */}
             {!show3dBackground && (
-              <div
-                className="glass-bubble-pill flex items-center gap-1.5 px-2 py-1 shrink-0 shadow-lg"
-                title={language === "ar" ? "اختيار لون الخلفية: أسود / رمادي / أبيض" : "Background: Black / Gray / White"}
+              <button
+                type="button"
+                onClick={() => {
+                  const next = studioBgColor === "black" ? "gray" : "black";
+                  setStudioBgColor(next);
+                  try { localStorage.setItem("moon_wolf_bg_color", next); } catch {}
+                }}
+                className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold cursor-pointer shrink-0 shadow-lg"
+                title={language === "ar" ? `التبديل إلى ${studioBgColor === "black" ? "الرمادي" : "الأسود"}` : `Switch to ${studioBgColor === "black" ? "Gray" : "Black"}`}
               >
-                {([
-                  { id: "black" as const, hex: "#000000", labelAr: "أسود", labelEn: "Black" },
-                  { id: "gray" as const, hex: "#666666", labelAr: "رمادي", labelEn: "Gray" },
-                  { id: "white" as const, hex: "#ffffff", labelAr: "أبيض", labelEn: "White" },
-                ]).map(c => {
-                  const isActive = studioBgColor === c.id;
-                  return (
-                    <button
-                      type="button"
-                      key={c.id}
-                      onClick={() => {
-                        setStudioBgColor(c.id);
-                        try { localStorage.setItem("moon_wolf_bg_color", c.id); } catch {}
-                      }}
-                      className={`w-5 h-5 rounded-full transition-all cursor-pointer flex items-center justify-center ${
-                        isActive ? "ring-2 ring-cyan-400 scale-110 shadow-md" : "opacity-60 hover:opacity-100 hover:scale-105"
-                      }`}
-                      style={{
-                        backgroundColor: c.hex,
-                        border: c.id === "white" ? "1px solid rgba(0,0,0,0.35)" : "1px solid rgba(255,255,255,0.45)"
-                      }}
-                      title={`${c.id === "white" ? "#FFFFFF" : c.id === "gray" ? "#666666" : "#000000"} (${language === "ar" ? c.labelAr : c.labelEn})`}
-                    >
-                      {isActive && (
-                        <div className={`w-1.5 h-1.5 rounded-full ${c.id === "white" ? "bg-black" : "bg-white"}`} />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+                <div
+                  className="w-3 h-3 rounded-full border border-white/50 shadow-xs shrink-0"
+                  style={{ backgroundColor: studioBgColor === "black" ? "#000000" : "#666666" }}
+                />
+                <span>{studioBgColor === "black" ? (language === "ar" ? "أسود" : "Black") : (language === "ar" ? "رمادي" : "Gray")}</span>
+              </button>
             )}
+
             <button
               type="button"
               onClick={toggleLanguage}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold cursor-pointer"
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold cursor-pointer shrink-0"
             >
               <Globe className="h-3.5 w-3.5 text-cyan-300" />
               <span>{language === "en" ? "عربي" : "EN"}</span>
