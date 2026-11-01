@@ -1215,61 +1215,9 @@ export default function WolfMoon({
       <header
         className="relative z-20 px-6 pt-3 pb-4 glass-luxury-panel m-3 mb-0 rounded-2xl"
       >
-        {/* ===== TOP DYNAMIC NOTCH (The Blue: Validation Score & Graph Stats) ===== */}
-        <div className="flex justify-center -mt-3 mb-3">
-          <div
-            className="liquid-glass-notch flex items-center gap-3.5 px-6 py-2 transition-all shadow-2xl"
-          >
-            {/* Institutional Score Badge */}
-            {institutionalValidation && (
-              <div
-                className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black transition-all"
-                style={{
-                  background: institutionalValidation.score >= 85 ? "rgba(52, 211, 153, 0.22)" : institutionalValidation.score >= 50 ? "rgba(251, 191, 36, 0.22)" : "rgba(248, 113, 113, 0.22)",
-                  color: institutionalValidation.score >= 85 ? "#34d399" : institutionalValidation.score >= 50 ? "#fbbf24" : "#f87171",
-                  border: `1px solid ${institutionalValidation.score >= 85 ? "rgba(52, 211, 153, 0.45)" : institutionalValidation.score >= 50 ? "rgba(251, 191, 36, 0.45)" : "rgba(248, 113, 113, 0.45)"}`,
-                }}
-              >
-                <Shield className="h-3.5 w-3.5 animate-pulse" />
-                <span>{getValidationBadge(institutionalValidation)} ({institutionalValidation.score}/100)</span>
-              </div>
-            )}
-
-            {/* Vertical Divider */}
-            <div className="h-4 w-px bg-white/25" />
-
-            {/* Live Graph Metrics */}
-            <div className="flex items-center gap-2 flex-wrap">
-              {[
-                { icon: <Database className="h-3 w-3 text-cyan-300" />, label: `${graphStats.nodeCount} ${t("nodes")}` },
-                { icon: <Network className="h-3 w-3 text-purple-300" />, label: `${tripleCount} ${t("triples")}` },
-                { icon: <Activity className="h-3 w-3 text-emerald-300" />, label: `${completionScore}%` },
-                {
-                  icon: connectivity.connected ? <CheckCircle2 className="h-3 w-3 text-emerald-300" /> : <AlertTriangle className="h-3 w-3 text-amber-300" />,
-                  label: connectivity.connected ? t("connectedLabel") : `${connectivity.orphans.length} ${t("orphans")}`,
-                  alert: !connectivity.connected
-                },
-              ].map((stat, i) => (
-                <span
-                  key={i}
-                  className="flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-bold transition-all"
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.12)',
-                    border: '1px solid rgba(255, 255, 255, 0.22)',
-                    color: stat.alert ? '#fbbf24' : '#ffffff',
-                  }}
-                >
-                  {stat.icon}
-                  <span>{stat.label}</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* ===== TOP CONTROLS ROW ===== */}
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 flex-wrap">
-          {/* Left: Branding & Back Button */}
+        {/* ===== ROW 1: BRANDING (BLUE) — TOP DYNAMIC NOTCH — IRAQI FINDER (RED WITH MOON LOGO) ===== */}
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 -mt-3 mb-3 flex-wrap">
+          {/* Blue Circle (Left): Back Button & MOON Studio Logo */}
           <div className="flex items-center gap-3.5">
             {onBack && (
               <button
@@ -1284,12 +1232,12 @@ export default function WolfMoon({
             )}
             <div className="flex items-center gap-3">
               <div className="relative flex items-center justify-center">
-                <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-10 w-auto object-contain drop-shadow-lg" />
+                <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-9 w-auto object-contain drop-shadow-lg" />
               </div>
               <div>
-                <h1 className="text-xl font-black tracking-tight flex items-center gap-2 text-white">
+                <h1 className="text-lg font-black tracking-tight flex items-center gap-2 text-white">
                   <span>MOON</span>
-                  <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-white/20 border border-white/30 text-white font-bold uppercase tracking-wider">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 border border-white/30 text-white font-bold uppercase tracking-wider">
                     Studio
                   </span>
                 </h1>
@@ -1297,101 +1245,73 @@ export default function WolfMoon({
             </div>
           </div>
 
-          {/* Right: Regrouped Green Controls in Liquid Glass */}
-          <div className="flex items-center gap-2 flex-wrap justify-end">
-            {/* Record Title input with Save Status indicator */}
-            <div className="flex items-center gap-1.5 glass-bubble-pill px-3 py-1 text-xs">
-              <BMSaveStatus status={saveStatus} />
-              <input
-                type="text"
-                value={recordTitle}
-                onChange={(e) => { setRecordTitle(e.target.value); setSaveStatus("unsaved"); }}
-                className="bg-transparent text-xs font-bold focus:outline-none placeholder-white/50 text-white w-40"
-                placeholder={t("recordTitle")}
-              />
-            </div>
-
-            {/* Save Button */}
-            <button
-              type="button"
-              onClick={handleSave}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-4 py-2 text-xs font-black text-white cursor-pointer shadow-xl"
+          {/* Center: The Dynamic Notch */}
+          <div className="flex justify-center">
+            <div
+              className="liquid-glass-notch flex items-center gap-3.5 px-6 py-2 transition-all shadow-2xl"
             >
-              <Save className="h-3.5 w-3.5 text-emerald-300 drop-shadow" />
-              <span>{t("save")}</span>
-            </button>
+              {/* Institutional Score Badge */}
+              {institutionalValidation && (
+                <div
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black transition-all"
+                  style={{
+                    background: institutionalValidation.score >= 85 ? "rgba(52, 211, 153, 0.22)" : institutionalValidation.score >= 50 ? "rgba(251, 191, 36, 0.22)" : "rgba(248, 113, 113, 0.22)",
+                    color: institutionalValidation.score >= 85 ? "#34d399" : institutionalValidation.score >= 50 ? "#fbbf24" : "#f87171",
+                    border: `1px solid ${institutionalValidation.score >= 85 ? "rgba(52, 211, 153, 0.45)" : institutionalValidation.score >= 50 ? "rgba(251, 191, 36, 0.45)" : "rgba(248, 113, 113, 0.45)"}`,
+                  }}
+                >
+                  <Shield className="h-3.5 w-3.5 animate-pulse" />
+                  <span>{getValidationBadge(institutionalValidation)} ({institutionalValidation.score}/100)</span>
+                </div>
+              )}
 
-            {/* Iraqi Authority Finder Button */}
+              {/* Vertical Divider */}
+              <div className="h-4 w-px bg-white/25" />
+
+              {/* Live Graph Metrics */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {[
+                  { icon: <Database className="h-3 w-3 text-cyan-300" />, label: `${graphStats.nodeCount} ${t("nodes")}` },
+                  { icon: <Network className="h-3 w-3 text-purple-300" />, label: `${tripleCount} ${t("triples")}` },
+                  { icon: <Activity className="h-3 w-3 text-emerald-300" />, label: `${completionScore}%` },
+                  {
+                    icon: connectivity.connected ? <CheckCircle2 className="h-3 w-3 text-emerald-300" /> : <AlertTriangle className="h-3 w-3 text-amber-300" />,
+                    label: connectivity.connected ? t("connectedLabel") : `${connectivity.orphans.length} ${t("orphans")}`,
+                    alert: !connectivity.connected
+                  },
+                ].map((stat, i) => (
+                  <span
+                    key={i}
+                    className="flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-bold transition-all"
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.12)',
+                      border: '1px solid rgba(255, 255, 255, 0.22)',
+                      color: stat.alert ? '#fbbf24' : '#ffffff',
+                    }}
+                  >
+                    {stat.icon}
+                    <span>{stat.label}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Red Circle (Right): Iraqi Authority Finder Button with Moon Logo replacing Sparkle icon */}
+          <div className="flex items-center justify-end">
             <button
               type="button"
               onClick={() => setShowIraqiAuthorityModal(true)}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-4 py-2 text-xs font-black text-white cursor-pointer shadow-xl"
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-2 px-4 py-2 text-xs font-black text-white cursor-pointer shadow-xl"
             >
-              <Sparkles className="h-3.5 w-3.5 text-amber-300 drop-shadow" />
-              <span>🇮🇶 Iraqi Authority Finder</span>
-            </button>
-
-            {/* Reset Button */}
-            <button
-              type="button"
-              onClick={handleResetAll}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer text-rose-300 border-rose-400/30 hover:border-rose-400"
-            >
-              <RefreshCw className="h-3.5 w-3.5 text-rose-400" />
-              <span>{t("reset") || "Reset"}</span>
-            </button>
-
-            {/* Import Button */}
-            <button
-              type="button"
-              onClick={() => setShowImportDialog(true)}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer text-white"
-            >
-              <Upload className="h-3.5 w-3.5 text-cyan-300" />
-              <span>{t("import")}</span>
-            </button>
-
-            {/* Field Manager (Restricted to Super Admin Isaac) */}
-            <button
-              type="button"
-              onClick={() => {
-                if (!isSuperAdmin) {
-                  toast.error(
-                    language === "ar"
-                      ? "عذراً، تخصيص القوالب مقتصر على المشرف العام (إسحاق) فقط."
-                      : "Access restricted: Custom templates are only accessible by Super Admin (Isaac)."
-                  );
-                  return;
-                }
-                setShowFieldManager(!showFieldManager);
-              }}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer"
-              style={{
-                borderColor: hiddenFields.size > 0 ? "rgba(251,191,36,0.8)" : undefined,
-                color: hiddenFields.size > 0 ? "#fbbf24" : undefined,
-                opacity: isSuperAdmin ? 1 : 0.85,
-              }}
-              title={!isSuperAdmin ? (language === "ar" ? "مخصص للمشرف العام إسحاق فقط" : "Super Admin Isaac only") : undefined}
-            >
-              <Settings className="h-3.5 w-3.5" />
-              <span>{hiddenFields.size > 0 ? `${hiddenFields.size} ${t("fieldsHidden")}` : t("customTemplates")}</span>
-              {!isSuperAdmin && <Lock className="h-2.5 w-2.5 text-white/50" />}
-            </button>
-
-            {/* Language Toggle */}
-            <button
-              type="button"
-              onClick={toggleLanguage}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer"
-            >
-              <Globe className="h-3.5 w-3.5 text-cyan-300" />
-              <span>{language === "en" ? "عربي" : "EN"}</span>
+              <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-4 w-auto object-contain drop-shadow" />
+              <span>IQ Iraqi Authority Finder</span>
             </button>
           </div>
         </div>
 
-        {/* ===== ROW 2: TEMPLATE BAR ===== */}
-        <div className="max-w-7xl mx-auto mt-3 pt-3 border-t border-white/15 flex items-center gap-2 flex-wrap">
+        {/* ===== ROW 2: TEMPLATES BAR (GREEN — CENTERED IN THE MIDDLE) ===== */}
+        <div className="max-w-7xl mx-auto flex items-center justify-center gap-2.5 flex-wrap pt-2.5 pb-2 border-t border-white/10">
           <span className="text-[11px] font-bold text-white/60 uppercase tracking-wider mr-1">
             Templates:
           </span>
@@ -1405,7 +1325,7 @@ export default function WolfMoon({
                 className={`glass-bubble-pill flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold transition-all duration-300 cursor-pointer ${
                   isSelected
                     ? "bg-white/35 border-white text-white shadow-xl scale-[1.02] ring-1 ring-white/50"
-                    : "opacity-60 filter blur-[0.2px] hover:opacity-100 hover:filter-none hover:scale-100 text-white/80 border-white/20"
+                    : "opacity-45 filter blur-[1.2px] hover:opacity-100 hover:filter-none hover:scale-100 text-white/70 border-white/20"
                 }`}
               >
                 {TEMPLATE_ICONS[tmpl.id]}
@@ -1414,39 +1334,149 @@ export default function WolfMoon({
             );
           })}
         </div>
+
+        {/* ===== ROW 3: RECORD ACTIONS & CONTROLS (CENTERED IN THE MIDDLE) ===== */}
+        <div className="max-w-7xl mx-auto flex items-center justify-center gap-2.5 flex-wrap pt-2 border-t border-white/10">
+          {/* Record Title input with Save Status indicator */}
+          <div className="flex items-center gap-1.5 glass-bubble-pill px-3.5 py-1.5 text-xs">
+            <BMSaveStatus status={saveStatus} />
+            <input
+              type="text"
+              value={recordTitle}
+              onChange={(e) => { setRecordTitle(e.target.value); setSaveStatus("unsaved"); }}
+              className="bg-transparent text-xs font-bold focus:outline-none placeholder-white/50 text-white w-44"
+              placeholder={t("recordTitle")}
+            />
+          </div>
+
+          {/* Save Button */}
+          <button
+            type="button"
+            onClick={handleSave}
+            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-4 py-2 text-xs font-black text-white cursor-pointer shadow-xl"
+          >
+            <Save className="h-3.5 w-3.5 text-emerald-300 drop-shadow" />
+            <span>{t("save")}</span>
+          </button>
+
+          {/* Reset Button */}
+          <button
+            type="button"
+            onClick={handleResetAll}
+            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer text-rose-300 border-rose-400/30 hover:border-rose-400"
+          >
+            <RefreshCw className="h-3.5 w-3.5 text-rose-400" />
+            <span>{t("reset") || "Reset"}</span>
+          </button>
+
+          {/* Import Button */}
+          <button
+            type="button"
+            onClick={() => setShowImportDialog(true)}
+            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer text-white"
+          >
+            <Upload className="h-3.5 w-3.5 text-cyan-300" />
+            <span>{t("import")}</span>
+          </button>
+
+          {/* Field Manager (Restricted to Super Admin Isaac) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (!isSuperAdmin) {
+                toast.error(
+                  language === "ar"
+                    ? "عذراً، تخصيص القوالب مقتصر على المشرف العام (إسحاق) فقط."
+                    : "Access restricted: Custom templates are only accessible by Super Admin (Isaac)."
+                );
+                return;
+              }
+              setShowFieldManager(!showFieldManager);
+            }}
+            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer"
+            style={{
+              borderColor: hiddenFields.size > 0 ? "rgba(251,191,36,0.8)" : undefined,
+              color: hiddenFields.size > 0 ? "#fbbf24" : undefined,
+              opacity: isSuperAdmin ? 1 : 0.85,
+            }}
+            title={!isSuperAdmin ? (language === "ar" ? "مخصص للمشرف العام إسحاق فقط" : "Super Admin Isaac only") : undefined}
+          >
+            <Settings className="h-3.5 w-3.5" />
+            <span>{hiddenFields.size > 0 ? `${hiddenFields.size} ${t("fieldsHidden")}` : t("customTemplates")}</span>
+            {!isSuperAdmin && <Lock className="h-2.5 w-2.5 text-white/50" />}
+          </button>
+
+          {/* Language Toggle */}
+          <button
+            type="button"
+            onClick={toggleLanguage}
+            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer"
+          >
+            <Globe className="h-3.5 w-3.5 text-cyan-300" />
+            <span>{language === "en" ? "عربي" : "EN"}</span>
+          </button>
+        </div>
       </header>
 
       {/* ===== SEGMENTED OUTPUT TABS (Frosted Pill System with Gradual Depth Fade) ===== */}
       <nav
         className="relative z-10 px-6 py-2"
       >
-        <div className="max-w-7xl mx-auto flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+        <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
           {([
             { key: "editor" as OutputTab, icon: <Layers className="h-3.5 w-3.5" />, label: t("bibframeEditor"), color: "#38bdf8" },
             { key: "w3c-jsonld" as OutputTab, icon: <Shield className="h-3.5 w-3.5" />, label: `${t("w3cJsonLd")} ${w3cValidation?.valid ? "✓" : ""}`, color: "#34d399" },
             { key: "jsonld" as OutputTab, icon: <Braces className="h-3.5 w-3.5" />, label: t("rawJsonLd"), color: "#22d3ee" },
-            
             { key: "rdf-xml" as OutputTab, icon: <Code className="h-3.5 w-3.5" />, label: "RDF/XML", color: "#10b981" },
             { key: "turtle" as OutputTab, icon: <Code className="h-3.5 w-3.5" />, label: t("turtle"), color: "#a78bfa" },
             { key: "ntriples" as OutputTab, icon: <FileText className="h-3.5 w-3.5" />, label: t("nTriples"), color: "#fb923c" },
             { key: "marc21-viewer" as OutputTab, icon: <BookOpen className="h-3.5 w-3.5" />, label: "MARC 21 View", color: "#f43f5e" }
-          ] as const).map(tab => (
-            <button
-              type="button"
-              key={tab.key}
-              onClick={() => {
-                if (tab.key === "opac") {
-                  window.location.href = "/opac.html";
-                  return;
-                }
-                setActiveTab(tab.key);
-              }}
-              className={`glass-bubble-pill cursor-pointer px-4 py-1.5 text-xs font-bold flex items-center gap-1.5 shrink-0 ${activeTab === tab.key ? "bg-white/30 border-white text-white shadow-lg" : "text-white/70 hover:text-white"}`}
-            >
-              <span style={{ color: tab.color }}>{tab.icon}</span>
-              <span>{tab.label}</span>
-            </button>
-          ))}
+          ] as const).map(tab => {
+            const isSelected = activeTab === tab.key;
+            return (
+              <button
+                type="button"
+                key={tab.key}
+                onClick={() => {
+                  if (tab.key === "opac") {
+                    window.location.href = "/opac.html";
+                    return;
+                  }
+                  setActiveTab(tab.key);
+                }}
+                className={`glass-bubble-pill cursor-pointer px-4 py-1.5 text-xs font-bold flex items-center gap-1.5 shrink-0 transition-all duration-300 ${
+                  isSelected
+                    ? "bg-white/40 border-white text-white shadow-2xl scale-[1.05] ring-2 ring-white/80"
+                    : "text-white/60 hover:text-white hover:scale-100"
+                }`}
+                style={isSelected ? {
+                  filter: 'blur(0px) contrast(1.15) brightness(1.1)',
+                  boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.5), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 16px rgba(255, 255, 255, 0.4), 0 8px 32px rgba(0, 0, 0, 0.35)',
+                  borderColor: 'rgba(255, 255, 255, 0.95)',
+                  opacity: 1,
+                } : {
+                  filter: 'blur(2.5px) saturate(0.5) brightness(0.8)',
+                  opacity: 0.28,
+                  backdropFilter: 'blur(4px)',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSelected) {
+                    e.currentTarget.style.filter = 'blur(0px) saturate(1) brightness(1)';
+                    e.currentTarget.style.opacity = '0.95';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isSelected) {
+                    e.currentTarget.style.filter = 'blur(2.5px) saturate(0.5) brightness(0.8)';
+                    e.currentTarget.style.opacity = '0.28';
+                  }
+                }}
+              >
+                <span style={{ color: tab.color, filter: isSelected ? 'drop-shadow(0 0 8px rgba(255,255,255,0.6))' : undefined }}>{tab.icon}</span>
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
       </nav>
 
