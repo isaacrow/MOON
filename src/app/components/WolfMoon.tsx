@@ -30,7 +30,7 @@ import {
   Building, MapPin, Tag, Newspaper, Archive, Shield, Hash, Activity,
   Copy, ExternalLink, Zap, Settings, RefreshCw, Plus, X, Info, Home,
   Moon, Star, Orbit, Waves, Fingerprint, Terminal, Languages, Scissors, Sun, Brain,
-  Sliders, ArrowRightLeft, QrCode, UserCheck, Replace, Columns, Maximize2, LayoutGrid, List, Lock
+  Sliders, ArrowRightLeft, QrCode, UserCheck, Replace, Columns, Maximize2, LayoutGrid, List, Lock, Box
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import moonLogoWhite from "../../assets/white.png";
@@ -338,6 +338,26 @@ export default function WolfMoon({
   const [language, setLanguage] = useState<"en" | "ar">(i18n.language as "en" | "ar");
 
   // ===== GLASS THEME =====
+  // ===== 3D BACKGROUND TOGGLE =====
+  const [show3dBackground, setShow3dBackground] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem("moon_wolf_3d_bg");
+      return stored !== null ? stored === "true" : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const toggle3dBackground = () => {
+    setShow3dBackground(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem("moon_wolf_3d_bg", String(next));
+      } catch {}
+      return next;
+    });
+  };
+
   const [glassTheme, setGlassTheme] = useState<GlassTheme>("dark");
   const BM = glassTheme === "legacy" ? BM_LEGACY : glassTheme === "classic" ? BM_CLASSIC : BM_DARK;
   const gradientClass = glassTheme === "legacy" ? "animated-gradient-bg" : glassTheme === "classic" ? "" : "animated-gradient-bg-blue";
@@ -1179,35 +1199,46 @@ export default function WolfMoon({
       }}
     >
       {/* ===== 1. INTERACTIVE 3D SPLINE SCENE BACKGROUND ===== */}
-      <div
-        className="fixed inset-0 z-0 overflow-hidden pointer-events-auto"
-        style={{ top: '-10%', height: '120%' }}
-      >
-        <iframe
-          src="https://my.spline.design/3ddesigntextcopycopy-ICjwUjRH9s8O1NCNqRAWjo5g-5OJ/"
-          frameBorder="0"
-          width="100%"
-          height="100%"
-          className="w-full h-full"
-          title="Spline 3D Scene"
-          allow="fullscreen; autoplay"
+      {show3dBackground && (
+        <div
+          className="fixed inset-0 z-0 overflow-hidden pointer-events-auto"
+          style={{ top: '-10%', height: '120%' }}
+        >
+          <iframe
+            src="https://my.spline.design/3ddesigntextcopycopy-ICjwUjRH9s8O1NCNqRAWjo5g-5OJ/"
+            frameBorder="0"
+            width="100%"
+            height="100%"
+            className="w-full h-full"
+            title="Spline 3D Scene"
+            allow="fullscreen; autoplay"
+            style={{
+              pointerEvents: 'auto',
+              border: 'none',
+              background: 'transparent'
+            }}
+          />
+        </div>
+      )}
+
+      {/* ===== 2. FROSTED GLASS / SLEEK STUDIO BACKDROP OVERLAY ===== */}
+      {show3dBackground ? (
+        <div
+          className="fixed inset-0 z-0 pointer-events-none"
           style={{
-            pointerEvents: 'auto',
-            border: 'none',
-            background: 'transparent'
+            background: 'rgba(255, 255, 255, 0.40)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
           }}
         />
-      </div>
-
-      {/* ===== 2. FROSTED GLASS BACKDROP OVERLAY ===== */}
-      <div
-        className="fixed inset-0 z-0 pointer-events-none"
-        style={{
-          background: 'rgba(255, 255, 255, 0.40)',
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-        }}
-      />
+      ) : (
+        <div
+          className="fixed inset-0 z-0 pointer-events-none"
+          style={{
+            background: 'radial-gradient(ellipse at 50% 0%, #1e293b 0%, #0f172a 50%, #020617 100%)',
+          }}
+        />
+      )}
 
       <Toaster position={language === "ar" ? "top-left" : "top-right"} />
 
@@ -1309,6 +1340,15 @@ export default function WolfMoon({
             </button>
             <button
               type="button"
+              onClick={toggle3dBackground}
+              className={`glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3 py-2 text-xs font-bold cursor-pointer ${show3dBackground ? 'text-cyan-300' : 'text-white/60'}`}
+              title={show3dBackground ? (language === "ar" ? "إيقاف الخلفية ثلاثية الأبعاد (3D)" : "Turn 3D background OFF") : (language === "ar" ? "تشغيل الخلفية ثلاثية الأبعاد (3D)" : "Turn 3D background ON")}
+            >
+              <Box className={`h-3.5 w-3.5 ${show3dBackground ? 'text-cyan-300' : 'text-white/40'}`} />
+              <span>{show3dBackground ? (language === "ar" ? "3D مفعّل" : "3D ON") : (language === "ar" ? "3D معطّل" : "3D OFF")}</span>
+            </button>
+            <button
+              type="button"
               onClick={toggleLanguage}
               className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer"
             >
@@ -1318,101 +1358,107 @@ export default function WolfMoon({
           </div>
         </div>
 
-        {/* ===== ROW 2: TEMPLATES BAR (GREEN — CENTERED IN THE MIDDLE) ===== */}
+        {/* ===== ROW 2: TEMPLATES & RECORD CONTROLS (UNIFIED WITH DIVIDER LINE) ===== */}
         <div className="max-w-7xl mx-auto flex items-center justify-center gap-2.5 flex-wrap pt-2.5 pb-2 border-t border-white/10">
-          <span className="text-[11px] font-bold text-white/60 uppercase tracking-wider mr-1">
-            Templates:
-          </span>
-          {getAllTemplates().map(tmpl => {
-            const isSelected = selectedTemplate === tmpl.id;
-            return (
-              <button
-                type="button"
-                key={tmpl.id}
-                onClick={() => setSelectedTemplate(tmpl.id)}
-                className={`glass-bubble-pill flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold transition-all duration-200 cursor-pointer ${
-                  isSelected
-                    ? "bg-white/35 border-white text-white shadow-xl scale-[1.02] ring-1 ring-white/50"
-                    : "text-white/85 hover:text-white hover:bg-white/20 border-white/20"
-                }`}
-              >
-                {TEMPLATE_ICONS[tmpl.id]}
-                <span>{tmpl.name}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* ===== ROW 3: RECORD ACTIONS & CONTROLS (CENTERED IN THE MIDDLE) ===== */}
-        <div className="max-w-7xl mx-auto flex items-center justify-center gap-2.5 flex-wrap pt-2 border-t border-white/10">
-          {/* Record Title input with Save Status indicator */}
-          <div className="flex items-center gap-1.5 glass-bubble-pill px-3.5 py-1.5 text-xs">
-            <BMSaveStatus status={saveStatus} />
-            <input
-              type="text"
-              value={recordTitle}
-              onChange={(e) => { setRecordTitle(e.target.value); setSaveStatus("unsaved"); }}
-              className="bg-transparent text-xs font-bold focus:outline-none placeholder-white/50 text-white w-44"
-              placeholder={t("recordTitle")}
-            />
+          {/* Templates Section */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] font-bold text-white/60 uppercase tracking-wider mr-1">
+              Templates:
+            </span>
+            {getAllTemplates().map(tmpl => {
+              const isSelected = selectedTemplate === tmpl.id;
+              return (
+                <button
+                  type="button"
+                  key={tmpl.id}
+                  onClick={() => setSelectedTemplate(tmpl.id)}
+                  className={`glass-bubble-pill flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold transition-all duration-200 cursor-pointer ${
+                    isSelected
+                      ? "bg-white/35 border-white text-white shadow-xl scale-[1.02] ring-1 ring-white/50"
+                      : "text-white/85 hover:text-white hover:bg-white/20 border-white/20"
+                  }`}
+                >
+                  {TEMPLATE_ICONS[tmpl.id]}
+                  <span>{tmpl.name}</span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* Save Button */}
-          <button
-            type="button"
-            onClick={handleSave}
-            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-4 py-2 text-xs font-black text-white cursor-pointer shadow-xl"
-          >
-            <Save className="h-3.5 w-3.5 text-emerald-300 drop-shadow" />
-            <span>{t("save")}</span>
-          </button>
+          {/* Divider Line Between Them */}
+          <div className="h-6 w-px bg-white/30 mx-1.5 shrink-0 hidden md:block" />
 
-          {/* Reset Button */}
-          <button
-            type="button"
-            onClick={handleResetAll}
-            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer text-rose-300 border-rose-400/30 hover:border-rose-400"
-          >
-            <RefreshCw className="h-3.5 w-3.5 text-rose-400" />
-            <span>{t("reset") || "Reset"}</span>
-          </button>
+          {/* Record Actions & Controls */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Record Title input with Save Status indicator */}
+            <div className="flex items-center gap-1.5 glass-bubble-pill px-3 py-1.5 text-xs">
+              <BMSaveStatus status={saveStatus} />
+              <input
+                type="text"
+                value={recordTitle}
+                onChange={(e) => { setRecordTitle(e.target.value); setSaveStatus("unsaved"); }}
+                className="bg-transparent text-xs font-bold focus:outline-none placeholder-white/50 text-white w-36"
+                placeholder={t("recordTitle")}
+              />
+            </div>
 
-          {/* Import Button */}
-          <button
-            type="button"
-            onClick={() => setShowImportDialog(true)}
-            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer text-white"
-          >
-            <Upload className="h-3.5 w-3.5 text-cyan-300" />
-            <span>{t("import")}</span>
-          </button>
+            {/* Save Button */}
+            <button
+              type="button"
+              onClick={handleSave}
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-black text-white cursor-pointer shadow-xl"
+            >
+              <Save className="h-3.5 w-3.5 text-emerald-300 drop-shadow" />
+              <span>{t("save")}</span>
+            </button>
 
-          {/* Field Manager (Restricted to Super Admin Isaac) */}
-          <button
-            type="button"
-            onClick={() => {
-              if (!isSuperAdmin) {
-                toast.error(
-                  language === "ar"
-                    ? "عذراً، تخصيص القوالب مقتصر على المشرف العام (إسحاق) فقط."
-                    : "Access restricted: Custom templates are only accessible by Super Admin (Isaac)."
-                );
-                return;
-              }
-              setShowFieldManager(!showFieldManager);
-            }}
-            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer"
-            style={{
-              borderColor: hiddenFields.size > 0 ? "rgba(251,191,36,0.8)" : undefined,
-              color: hiddenFields.size > 0 ? "#fbbf24" : undefined,
-              opacity: isSuperAdmin ? 1 : 0.85,
-            }}
-            title={!isSuperAdmin ? (language === "ar" ? "مخصص للمشرف العام إسحاق فقط" : "Super Admin Isaac only") : undefined}
-          >
-            <Settings className="h-3.5 w-3.5" />
-            <span>{hiddenFields.size > 0 ? `${hiddenFields.size} ${t("fieldsHidden")}` : t("customTemplates")}</span>
-            {!isSuperAdmin && <Lock className="h-2.5 w-2.5 text-white/50" />}
-          </button>
+            {/* Reset Button */}
+            <button
+              type="button"
+              onClick={handleResetAll}
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold cursor-pointer text-rose-300 border-rose-400/30 hover:border-rose-400"
+            >
+              <RefreshCw className="h-3.5 w-3.5 text-rose-400" />
+              <span>{t("reset") || "Reset"}</span>
+            </button>
+
+            {/* Import Button */}
+            <button
+              type="button"
+              onClick={() => setShowImportDialog(true)}
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold cursor-pointer text-white"
+            >
+              <Upload className="h-3.5 w-3.5 text-cyan-300" />
+              <span>{t("import")}</span>
+            </button>
+
+            {/* Field Manager (Restricted to Super Admin Isaac) */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!isSuperAdmin) {
+                  toast.error(
+                    language === "ar"
+                      ? "عذراً، تخصيص القوالب مقتصر على المشرف العام (إسحاق) فقط."
+                      : "Access restricted: Custom templates are only accessible by Super Admin (Isaac)."
+                  );
+                  return;
+                }
+                setShowFieldManager(!showFieldManager);
+              }}
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold cursor-pointer"
+              style={{
+                borderColor: hiddenFields.size > 0 ? "rgba(251,191,36,0.8)" : undefined,
+                color: hiddenFields.size > 0 ? "#fbbf24" : undefined,
+                opacity: isSuperAdmin ? 1 : 0.85,
+              }}
+              title={!isSuperAdmin ? (language === "ar" ? "مخصص للمشرف العام إسحاق فقط" : "Super Admin Isaac only") : undefined}
+            >
+              <Settings className="h-3.5 w-3.5" />
+              <span>{hiddenFields.size > 0 ? `${hiddenFields.size} ${t("fieldsHidden")}` : t("customTemplates")}</span>
+              {!isSuperAdmin && <Lock className="h-2.5 w-2.5 text-white/50" />}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1611,10 +1657,10 @@ export default function WolfMoon({
                       ? 'bg-blue-600 text-white shadow-lg scale-105'
                       : 'text-white/70 hover:text-white hover:bg-white/10'
                   }`}
-                  title="عرض بطاقات الحقول المصنفة"
+                  title="عرض تسجيلات الحقول المصنفة"
                 >
                   <LayoutGrid className="h-3.5 w-3.5" />
-                  <span>{language === "ar" ? "أقسام البطاقات" : "Category Cards"}</span>
+                  <span>{language === "ar" ? "أقسام التسجيلات" : "Category Cards"}</span>
                 </button>
 
                 <button
