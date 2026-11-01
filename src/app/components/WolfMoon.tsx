@@ -1297,8 +1297,8 @@ export default function WolfMoon({
             </div>
           </div>
 
-          {/* Red Circle (Right): Iraqi Authority Finder Button with Moon Logo replacing Sparkle icon */}
-          <div className="flex items-center justify-end">
+          {/* Red Circle (Right): Iraqi Authority Finder + Language Toggle */}
+          <div className="flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={() => setShowIraqiAuthorityModal(true)}
@@ -1306,6 +1306,14 @@ export default function WolfMoon({
             >
               <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-4 w-auto object-contain drop-shadow" />
               <span>IQ Iraqi Authority Finder</span>
+            </button>
+            <button
+              type="button"
+              onClick={toggleLanguage}
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer"
+            >
+              <Globe className="h-3.5 w-3.5 text-cyan-300" />
+              <span>{language === "en" ? "عربي" : "EN"}</span>
             </button>
           </div>
         </div>
@@ -1322,10 +1330,10 @@ export default function WolfMoon({
                 type="button"
                 key={tmpl.id}
                 onClick={() => setSelectedTemplate(tmpl.id)}
-                className={`glass-bubble-pill flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold transition-all duration-300 cursor-pointer ${
+                className={`glass-bubble-pill flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold transition-all duration-200 cursor-pointer ${
                   isSelected
                     ? "bg-white/35 border-white text-white shadow-xl scale-[1.02] ring-1 ring-white/50"
-                    : "opacity-45 filter blur-[1.2px] hover:opacity-100 hover:filter-none hover:scale-100 text-white/70 border-white/20"
+                    : "text-white/85 hover:text-white hover:bg-white/20 border-white/20"
                 }`}
               >
                 {TEMPLATE_ICONS[tmpl.id]}
@@ -1405,20 +1413,10 @@ export default function WolfMoon({
             <span>{hiddenFields.size > 0 ? `${hiddenFields.size} ${t("fieldsHidden")}` : t("customTemplates")}</span>
             {!isSuperAdmin && <Lock className="h-2.5 w-2.5 text-white/50" />}
           </button>
-
-          {/* Language Toggle */}
-          <button
-            type="button"
-            onClick={toggleLanguage}
-            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer"
-          >
-            <Globe className="h-3.5 w-3.5 text-cyan-300" />
-            <span>{language === "en" ? "عربي" : "EN"}</span>
-          </button>
         </div>
       </header>
 
-      {/* ===== SEGMENTED OUTPUT TABS (Frosted Pill System with Gradual Depth Fade) ===== */}
+      {/* ===== SEGMENTED OUTPUT TABS (Frosted Glass Bubble Pills - Sharp & Clear) ===== */}
       <nav
         className="relative z-10 px-6 py-2"
       >
@@ -1444,35 +1442,13 @@ export default function WolfMoon({
                   }
                   setActiveTab(tab.key);
                 }}
-                className={`glass-bubble-pill cursor-pointer px-4 py-1.5 text-xs font-bold flex items-center gap-1.5 shrink-0 transition-all duration-300 ${
+                className={`glass-bubble-pill cursor-pointer px-4 py-1.5 text-xs font-bold flex items-center gap-1.5 shrink-0 transition-all duration-200 ${
                   isSelected
-                    ? "bg-white/40 border-white text-white shadow-2xl scale-[1.05] ring-2 ring-white/80"
-                    : "text-white/60 hover:text-white hover:scale-100"
+                    ? "bg-white/35 border-white text-white shadow-xl scale-[1.03] ring-1 ring-white/60"
+                    : "text-white/85 hover:text-white hover:bg-white/20 border-white/25 hover:scale-105"
                 }`}
-                style={isSelected ? {
-                  filter: 'blur(0px) contrast(1.15) brightness(1.1)',
-                  boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.5), inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 16px rgba(255, 255, 255, 0.4), 0 8px 32px rgba(0, 0, 0, 0.35)',
-                  borderColor: 'rgba(255, 255, 255, 0.95)',
-                  opacity: 1,
-                } : {
-                  filter: 'blur(2.5px) saturate(0.5) brightness(0.8)',
-                  opacity: 0.28,
-                  backdropFilter: 'blur(4px)',
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) {
-                    e.currentTarget.style.filter = 'blur(0px) saturate(1) brightness(1)';
-                    e.currentTarget.style.opacity = '0.95';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) {
-                    e.currentTarget.style.filter = 'blur(2.5px) saturate(0.5) brightness(0.8)';
-                    e.currentTarget.style.opacity = '0.28';
-                  }
-                }}
               >
-                <span style={{ color: tab.color, filter: isSelected ? 'drop-shadow(0 0 8px rgba(255,255,255,0.6))' : undefined }}>{tab.icon}</span>
+                <span style={{ color: isSelected ? "#ffffff" : tab.color }}>{tab.icon}</span>
                 <span>{tab.label}</span>
               </button>
             );
