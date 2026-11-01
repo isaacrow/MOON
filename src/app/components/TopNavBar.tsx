@@ -36,38 +36,50 @@ export function TopNavBar({
   onBack,
 }: TopNavBarProps) {
   const { t, i18n } = useTranslation();
-  const { username, user, logout, getUsers, approveUser, rejectUser, deleteUser, pendingCount } = useAuth();
+  const {
+    username,
+    user,
+    logout,
+    isSuperAdmin,
+    users: adminUsers,
+    usersLoading,
+    usersError,
+    refreshUsers,
+    approveUser,
+    rejectUser,
+    deleteUser,
+    pendingCount,
+  } = useAuth();
   const { darkMode } = useTheme();
 
   // Admin Approval Modal State
   const [showApprovalModal, setShowApprovalModal] = useState(false);
-  const [adminUsers, setAdminUsers] = useState<AuthUser[]>([]);
-
-  const isSuperAdmin = username?.toLowerCase() === 'isaac' || user?.username?.toLowerCase() === 'isaac';
-
-  const refreshUsers = () => {
-    setAdminUsers(getUsers());
-  };
+  const [actionError, setActionError] = useState('');
+  const [busyUser, setBusyUser] = useState<string | null>(null);
 
   useEffect(() => {
     if (showApprovalModal) {
+      setActionError('');
       refreshUsers();
     }
-  }, [showApprovalModal]);
+  }, [showApprovalModal, refreshUsers]);
 
-  const handleApprove = (uName: string) => {
-    approveUser(uName);
-    refreshUsers();
+  const runAction = async (
+    action: (uName: string) => Promise<{ success: boolean; message?: string }>,
+    uName: string
+  ) => {
+    setActionError('');
+    setBusyUser(uName);
+    const res = await action(uName);
+    setBusyUser(null);
+    if (!res.success) setActionError(res.message || 'Action failed. Please try again.');
   };
 
-  const handleReject = (uName: string) => {
-    rejectUser(uName);
-    refreshUsers();
-  };
-
+  const handleApprove = (uName: string) => runAction(approveUser, uName);
+  const handleReject = (uName: string) => runAction(rejectUser, uName);
   const handleDelete = (uName: string) => {
-    deleteUser(uName);
-    refreshUsers();
+    if (!window.confirm(`Delete the account "${uName}"? This cannot be undone.`)) return;
+    runAction(deleteUser, uName);
   };
 
   const toggleLanguage = () => {
@@ -379,12 +391,19 @@ export function TopNavBar({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={refreshUsers}
+                    onClick={() => refreshUsers()}
+                    disabled={usersLoading}
                     className="text-xs bg-white/5 border-white/20 text-white hover:bg-white/10"
                   >
-                    Refresh List
+                    {usersLoading ? 'Refreshing…' : 'Refresh List'}
                   </Button>
                 </div>
+
+                {(actionError || usersError) && (
+                  <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/25 rounded-xl px-3 py-2">
+                    {actionError || usersError}
+                  </p>
+                )}
 
                 {/* List of testers */}
                 <div className="space-y-3">
@@ -448,7 +467,9 @@ export function TopNavBar({
                           </div>
 
                           {/* Actions */}
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div
+                            className={`flex items-center gap-2 shrink-0 ${busyUser === u.username ? 'opacity-50 pointer-events-none' : ''}`}
+                          >
                             {isPending ? (
                               <>
                                 <Button
@@ -476,6 +497,16 @@ export function TopNavBar({
                                 className="bg-emerald-600/80 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl h-8 px-3 cursor-pointer"
                               >
                                 Re-Approve
+                              </Button>
+                            ) : u.role !== 'admin' ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleReject(u.username)}
+                                className="border-rose-500/40 text-rose-300 hover:bg-rose-500/20 text-xs rounded-xl h-8 px-3 cursor-pointer"
+                                title="Revoke access"
+                              >
+                                Revoke
                               </Button>
                             ) : null}
 

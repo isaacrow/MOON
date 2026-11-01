@@ -1099,8 +1099,9 @@ export default function WolfMoon({
           catalogerRole: (username?.toLowerCase() === "isaac" || username?.toLowerCase() === "admin") ? "super-admin" : "cataloger"
         },
       };
-      const initialStatus = (username?.toLowerCase() === "isaac" || username?.toLowerCase() === "admin") ? "complete" : "pending-review";
-      await saveRecord(record, username || "Anonymous");
+      // The server decides the final status from the signed-in user's session.
+      const saved = await saveRecord(record, username || "Anonymous");
+      const initialStatus = saved.status || "complete";
       setSaveStatus("saved");
       if (initialStatus === "pending-review") {
         toast.info(language === "ar" ? "تم حفظ التسجيلة وهي قيد المراجعة بانتظار اعتماد المشرف العام (isaac)" : "Record saved! Status: Pending review by Super Admin (isaac)", { description: title });

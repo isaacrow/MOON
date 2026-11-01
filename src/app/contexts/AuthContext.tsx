@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import { projectId, publicAnonKey } from '../../../utils/supabase/info';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
+import { moonFetch } from '../utils/moonApi';
 
 export interface AuthUser {
   username: string;
@@ -9,7 +9,7 @@ export interface AuthUser {
   status: 'pending' | 'approved' | 'rejected';
   registeredAt: string;
   approvedAt?: string;
-  password?: string;
+  reviewedBy?: string;
 }
 
 export interface LoginResult {
@@ -32,566 +32,345 @@ export interface SignupResult {
   status?: 'pending' | 'approved' | 'rejected';
 }
 
+export interface AdminActionResult {
+  success: boolean;
+  message?: string;
+}
+
 interface AuthContextType {
   isAuthenticated: boolean;
+  isSuperAdmin: boolean;
   username: string | null;
   user: AuthUser | null;
   accessToken: string | null;
   login: (identifier: string, password: string) => Promise<LoginResult>;
   signup: (data: SignupData | string, legacyPassword?: string) => Promise<SignupResult>;
   logout: () => void;
-  // Approval Management
+  // Approval Management (Super Admin only; all data lives on the server)
+  users: AuthUser[];
+  usersLoading: boolean;
+  usersError: string | null;
   getUsers: () => AuthUser[];
-  approveUser: (usernameOrEmail: string) => boolean;
-  rejectUser: (usernameOrEmail: string) => boolean;
-  deleteUser: (usernameOrEmail: string) => boolean;
+  refreshUsers: () => Promise<AuthUser[]>;
+  unlockAdmin: (password: string) => Promise<AdminActionResult>;
+  approveUser: (usernameOrEmail: string) => Promise<AdminActionResult>;
+  rejectUser: (usernameOrEmail: string) => Promise<AdminActionResult>;
+  deleteUser: (usernameOrEmail: string) => Promise<AdminActionResult>;
   pendingCount: number;
 }
 
-const STORAGE_USERS_KEY = 'moon_registered_users';
 const STORAGE_AUTH_KEY = 'moon_auth';
+// Legacy per-browser account list (stored plaintext passwords). No longer used.
+const LEGACY_USERS_KEY = 'moon_registered_users';
+const SUPER_ADMIN_USERNAME = 'isaac';
+const PENDING_POLL_MS = 30_000;
 
-export const SUPER_ADMIN: AuthUser = {
-  username: 'isaac',
-  email: 'isaac@moon.local',
-  institution: 'Moon Library Architecture Core (Super Admin)',
-  role: 'admin',
-  status: 'approved',
-  password: 'Eshak1996',
-  registeredAt: new Date().toISOString(),
-  approvedAt: new Date().toISOString(),
-};
-
-const INITIAL_USERS: AuthUser[] = [SUPER_ADMIN];
-
-function loadStoredUsers(): AuthUser[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_USERS_KEY);
-    if (raw) {
-      let parsed: AuthUser[] = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Delete any old generic accounts ('admin', 'tester')
-        parsed = parsed.filter(
-          (u) => u.username.toLowerCase() !== 'admin' && u.username.toLowerCase() !== 'tester'
-        );
-
-        // Find or insert Super Admin isaac with password Eshak1996
-        const isaacIdx = parsed.findIndex((u) => u.username.toLowerCase() === 'isaac');
-        if (isaacIdx >= 0) {
-          parsed[isaacIdx] = {
-            ...parsed[isaacIdx],
-            username: 'isaac',
-            password: 'Eshak1996',
-            role: 'admin',
-            status: 'approved',
-          };
-        } else {
-          parsed.unshift(SUPER_ADMIN);
-        }
-
-        try {
-          localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(parsed));
-        } catch {}
-        return parsed;
-      }
-    }
-  } catch (err) {
-    console.warn('Failed to parse stored users:', err);
-  }
-  try {
-    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(INITIAL_USERS));
-  } catch {}
-  return INITIAL_USERS;
-}
-
-function saveStoredUsers(users: AuthUser[]) {
-  try {
-    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(users));
-  } catch (err) {
-    console.error('Failed to save users to localStorage:', err);
-  }
-}
+const NETWORK_ERROR =
+  'Could not reach the Moon server. Please check your connection and try again.';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+interface StoredSession {
+  username: string;
+  email: string;
+  institution: string;
+  role: AuthUser['role'];
+  accessToken: string;
+  sessionToken: string;
+}
+
+function readStoredSession(): StoredSession | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_AUTH_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Sessions from before server-side auth have no sessionToken and can't be trusted.
+    if (parsed?.username && typeof parsed.sessionToken === 'string') return parsed;
+  } catch {}
+  return null;
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [username, setUsername] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [usersList, setUsersList] = useState<AuthUser[]>(loadStoredUsers);
+  const [users, setUsers] = useState<AuthUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState<string | null>(null);
+  // Admin token from the login-screen approval panel (isaac not signed into the app).
+  const unlockedAdminToken = useRef<string | null>(null);
 
-  // Synchronize users from localStorage, fetch backend accounts, and restore session
-  useEffect(() => {
-    const allUsers = loadStoredUsers();
-    setUsersList(allUsers);
+  const isSuperAdmin = user?.role === 'admin' && user.username.toLowerCase() === SUPER_ADMIN_USERNAME;
 
-    // Fetch accounts from backend server and reconcile
-    const syncBackendAccounts = async () => {
-      try {
-        const res = await fetch('/api/accounts');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && Array.isArray(data.accounts)) {
-            let backendList: AuthUser[] = data.accounts.filter(
-              (u: AuthUser) => u.username.toLowerCase() !== 'admin' && u.username.toLowerCase() !== 'tester'
-            );
-            const isaacIdx = backendList.findIndex((u) => u.username.toLowerCase() === 'isaac');
-            if (isaacIdx >= 0) {
-              backendList[isaacIdx] = {
-                ...backendList[isaacIdx],
-                username: 'isaac',
-                password: 'Eshak1996',
-                role: 'admin',
-                status: 'approved',
-              };
-            } else {
-              backendList.unshift(SUPER_ADMIN);
-            }
-            saveStoredUsers(backendList);
-            setUsersList(backendList);
-          }
-        }
-      } catch (err) {
-        console.warn('Backend accounts sync failed (using local cache):', err);
-      }
-    };
-
-    syncBackendAccounts();
-
+  const applySession = useCallback((sessionUser: AuthUser, token: string) => {
+    setIsAuthenticated(true);
+    setUsername(sessionUser.username);
+    setUser(sessionUser);
+    setAccessToken(token);
     try {
-      const savedAuth = localStorage.getItem(STORAGE_AUTH_KEY);
-      if (savedAuth) {
-        const parsed = JSON.parse(savedAuth);
-        if (parsed.username && parsed.accessToken) {
-          const matched = allUsers.find(
-            (u) => u.username.toLowerCase() === parsed.username.toLowerCase()
-          );
-
-          if (matched && matched.status === 'approved') {
-            setIsAuthenticated(true);
-            setUsername(matched.username);
-            setUser(matched);
-            setAccessToken(parsed.accessToken);
-            return;
-          } else if (!matched) {
-            // Keep active session for backward compatibility
-            setIsAuthenticated(true);
-            setUsername(parsed.username);
-            setUser({
-              username: parsed.username,
-              email: parsed.email || `${parsed.username}@moon.local`,
-              institution: parsed.institution || 'Tester Institution',
-              role: 'tester',
-              status: 'approved',
-              registeredAt: new Date().toISOString(),
-            });
-            setAccessToken(parsed.accessToken);
-            return;
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error restoring session:', error);
-      localStorage.removeItem(STORAGE_AUTH_KEY);
-    }
-  }, []);
-
-  const pendingCount = usersList.filter((u) => u.status === 'pending').length;
-
-  const getUsers = useCallback((): AuthUser[] => {
-    const refreshed = loadStoredUsers();
-    setUsersList(refreshed);
-    // Background refresh from backend
-    fetch('/api/accounts')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data && data.success && Array.isArray(data.accounts)) {
-          const filtered = data.accounts.filter(
-            (u: AuthUser) => u.username.toLowerCase() !== 'admin' && u.username.toLowerCase() !== 'tester'
-          );
-          saveStoredUsers(filtered);
-          setUsersList(filtered);
-        }
-      })
-      .catch(() => {});
-    return refreshed;
-  }, []);
-
-  const approveUser = useCallback((usernameOrEmail: string): boolean => {
-    const list = loadStoredUsers();
-    const targetLower = usernameOrEmail.trim().toLowerCase();
-    let updated = false;
-
-    const nextList = list.map((u) => {
-      if (u.username.toLowerCase() === targetLower || u.email.toLowerCase() === targetLower) {
-        updated = true;
-        return {
-          ...u,
-          status: 'approved' as const,
-          approvedAt: new Date().toISOString(),
-        };
-      }
-      return u;
-    });
-
-    if (updated) {
-      saveStoredUsers(nextList);
-      setUsersList(nextList);
-      // Persist to backend
-      fetch('/api/accounts/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: targetLower }),
-      }).catch((e) => console.warn('Backend approveUser error:', e));
-    }
-    return updated;
-  }, []);
-
-  const rejectUser = useCallback((usernameOrEmail: string): boolean => {
-    const list = loadStoredUsers();
-    const targetLower = usernameOrEmail.trim().toLowerCase();
-    let updated = false;
-
-    const nextList = list.map((u) => {
-      if (u.username.toLowerCase() === targetLower || u.email.toLowerCase() === targetLower) {
-        updated = true;
-        return {
-          ...u,
-          status: 'rejected' as const,
-        };
-      }
-      return u;
-    });
-
-    if (updated) {
-      saveStoredUsers(nextList);
-      setUsersList(nextList);
-      // Persist to backend
-      fetch('/api/accounts/reject', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: targetLower }),
-      }).catch((e) => console.warn('Backend rejectUser error:', e));
-    }
-    return updated;
-  }, []);
-
-  const deleteUser = useCallback((usernameOrEmail: string): boolean => {
-    const list = loadStoredUsers();
-    const targetLower = usernameOrEmail.trim().toLowerCase();
-    if (targetLower === 'isaac') {
-      return false; // Cannot delete Super Admin
-    }
-    const nextList = list.filter(
-      (u) => u.username.toLowerCase() !== targetLower && u.email.toLowerCase() !== targetLower
-    );
-
-    if (nextList.length !== list.length) {
-      saveStoredUsers(nextList);
-      setUsersList(nextList);
-      // Persist to backend
-      fetch('/api/accounts/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: targetLower }),
-      }).catch((e) => console.warn('Backend deleteUser error:', e));
-      return true;
-    }
-    return false;
-  }, []);
-
-  const login = async (identifier: string, inputPassword: string): Promise<LoginResult> => {
-    const cleanId = identifier.trim().toLowerCase();
-
-    // Check if identifier is the exclusive Super Admin (isaac)
-    if (cleanId === 'isaac' || cleanId === 'isaac@moon.local') {
-      if (inputPassword !== 'Eshak1996') {
-        return {
-          success: false,
-          message: 'Invalid password for Super Admin account.',
-        };
-      }
-
-      const token = `moon_super_admin_jwt_${Date.now()}`;
-      const superAdminUser = SUPER_ADMIN;
-      const authData = {
-        username: 'isaac',
-        email: superAdminUser.email,
-        institution: superAdminUser.institution,
-        role: 'admin' as const,
+      const stored: StoredSession = {
+        username: sessionUser.username,
+        email: sessionUser.email,
+        institution: sessionUser.institution,
+        role: sessionUser.role,
         accessToken: token,
+        sessionToken: token,
       };
-
-      setIsAuthenticated(true);
-      setUsername('isaac');
-      setUser(superAdminUser);
-      setAccessToken(token);
-
-      try {
-        localStorage.setItem(STORAGE_AUTH_KEY, JSON.stringify(authData));
-      } catch (e) {
-        console.error('Session persist error:', e);
-      }
-
-      return {
-        success: true,
-        status: 'approved',
-        message: 'Welcome Isaac Faleh (Super Administrator)!',
-      };
+      localStorage.setItem(STORAGE_AUTH_KEY, JSON.stringify(stored));
+    } catch (e) {
+      console.error('Session persist error:', e);
     }
+  }, []);
 
-    // Try refreshing users from backend first to get up-to-date approval status
-    let list = loadStoredUsers();
+  const clearSession = useCallback(() => {
+    setIsAuthenticated(false);
+    setUsername(null);
+    setUser(null);
+    setAccessToken(null);
+    setUsers([]);
     try {
-      const res = await fetch('/api/accounts');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.accounts)) {
-          list = data.accounts;
-          saveStoredUsers(list);
-          setUsersList(list);
-        }
-      }
+      localStorage.removeItem(STORAGE_AUTH_KEY);
+    } catch {}
+  }, []);
+
+  // Restore session and verify it with the server (catches rejected/deleted accounts).
+  useEffect(() => {
+    try {
+      localStorage.removeItem(LEGACY_USERS_KEY);
     } catch {}
 
-    // Check if identifier is the exclusive Super Admin (isaac)
-    if (cleanId === 'isaac' || cleanId === 'isaac@moon.local') {
-      if (inputPassword !== 'Eshak1996') {
-        return {
-          success: false,
-          message: 'Invalid password for Super Admin account.',
-        };
-      }
-
-      const token = `moon_super_admin_jwt_${Date.now()}`;
-      const superAdminUser = list.find((u) => u.username.toLowerCase() === 'isaac') || SUPER_ADMIN;
-      const authData = {
-        username: 'isaac',
-        email: superAdminUser.email,
-        institution: superAdminUser.institution,
-        role: 'admin' as const,
-        accessToken: token,
-      };
-
-      setIsAuthenticated(true);
-      setUsername('isaac');
-      setUser(superAdminUser);
-      setAccessToken(token);
-
+    const stored = readStoredSession();
+    if (!stored) {
       try {
-        localStorage.setItem(STORAGE_AUTH_KEY, JSON.stringify(authData));
-      } catch (e) {
-        console.error('Session persist error:', e);
-      }
-
-      return {
-        success: true,
-        status: 'approved',
-        message: 'Welcome Isaac Faleh (Super Administrator)!',
-      };
+        localStorage.removeItem(STORAGE_AUTH_KEY);
+      } catch {}
+      return;
     }
 
-    // Find in tester accounts
-    const matched = list.find(
-      (u) => u.username.toLowerCase() === cleanId || u.email.toLowerCase() === cleanId
+    applySession(
+      {
+        username: stored.username,
+        email: stored.email,
+        institution: stored.institution,
+        role: stored.role,
+        status: 'approved',
+        registeredAt: '',
+      },
+      stored.sessionToken
     );
 
-    if (matched) {
-      // Validate tester password
-      if (matched.password && matched.password !== inputPassword) {
-        return {
-          success: false,
-          message: 'Invalid password. Please check your credentials.',
-          status: matched.status,
-        };
+    moonFetch('/api/accounts/me', { sessionToken: stored.sessionToken })
+      .then(({ ok, status, data }) => {
+        if (ok && data?.success && data.user) {
+          applySession(data.user, stored.sessionToken);
+        } else if (status === 401) {
+          // Session expired, or the account was rejected/deleted by the admin.
+          clearSession();
+        }
+      })
+      .catch(() => {
+        // Offline: keep the cached session; server calls will re-check later.
+      });
+  }, [applySession, clearSession]);
+
+  const adminToken = useCallback(
+    () => (isSuperAdmin ? accessToken : null) || unlockedAdminToken.current,
+    [isSuperAdmin, accessToken]
+  );
+
+  const refreshUsers = useCallback(async (): Promise<AuthUser[]> => {
+    const token = adminToken();
+    if (!token) return [];
+    setUsersLoading(true);
+    try {
+      const { ok, data } = await moonFetch('/api/accounts', { sessionToken: token });
+      if (ok && data?.success && Array.isArray(data.accounts)) {
+        setUsers(data.accounts);
+        setUsersError(null);
+        return data.accounts;
       }
-
-      // Check approval status
-      if (matched.status === 'pending') {
-        return {
-          success: false,
-          status: 'pending',
-          message: `Account for "${matched.username}" is pending approval by Super Administrator Isaac Faleh. Once approved, you will be able to sign in.`,
-        };
-      }
-
-      if (matched.status === 'rejected') {
-        return {
-          success: false,
-          status: 'rejected',
-          message: `Tester access request for "${matched.username}" was declined by Super Administrator Isaac Faleh.`,
-        };
-      }
-
-      // Approved tester! Set session
-      const token = `moon_jwt_${Date.now()}_${Math.random().toString(36).substring(2)}`;
-      const authData = {
-        username: matched.username,
-        email: matched.email,
-        institution: matched.institution,
-        role: matched.role,
-        accessToken: token,
-      };
-
-      setIsAuthenticated(true);
-      setUsername(matched.username);
-      setUser(matched);
-      setAccessToken(token);
-
-      try {
-        localStorage.setItem(STORAGE_AUTH_KEY, JSON.stringify(authData));
-      } catch (e) {
-        console.error('Session persist error:', e);
-      }
-
-      return {
-        success: true,
-        status: 'approved',
-        message: `Welcome ${matched.username} from ${matched.institution || 'Tester Group'}!`,
-      };
+      setUsersError(data?.message || 'Could not load accounts from the server.');
+    } catch {
+      setUsersError(NETWORK_ERROR);
+    } finally {
+      setUsersLoading(false);
     }
+    return [];
+  }, [adminToken]);
 
-    return {
-      success: false,
-      status: 'unknown',
-      message: 'Account not found. Please register under the "Request Access" tab.',
-    };
+  const getUsers = useCallback((): AuthUser[] => {
+    refreshUsers();
+    return users;
+  }, [refreshUsers, users]);
+
+  // Keep the Super Admin's pending-approval badge live.
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    refreshUsers();
+    const timer = window.setInterval(refreshUsers, PENDING_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [isSuperAdmin, refreshUsers]);
+
+  const unlockAdmin = useCallback(
+    async (password: string): Promise<AdminActionResult> => {
+      try {
+        const { data } = await moonFetch('/api/accounts/login', {
+          body: { identifier: SUPER_ADMIN_USERNAME, password },
+        });
+        if (data?.success && data.token) {
+          unlockedAdminToken.current = data.token;
+          await refreshUsers();
+          return { success: true };
+        }
+        return { success: false, message: data?.message || 'Invalid Super Admin password.' };
+      } catch {
+        return { success: false, message: NETWORK_ERROR };
+      }
+    },
+    [refreshUsers]
+  );
+
+  const adminAction = useCallback(
+    async (action: 'approve' | 'reject' | 'delete', target: string): Promise<AdminActionResult> => {
+      const token = adminToken();
+      if (!token) return { success: false, message: 'Only the Super Admin can do this.' };
+      try {
+        const { ok, data } = await moonFetch(`/api/accounts/${action}`, {
+          body: { username: target.trim() },
+          sessionToken: token,
+        });
+        if (ok && data?.success) {
+          await refreshUsers();
+          return { success: true };
+        }
+        return { success: false, message: data?.message || `Failed to ${action} account.` };
+      } catch {
+        return { success: false, message: NETWORK_ERROR };
+      }
+    },
+    [adminToken, refreshUsers]
+  );
+
+  const approveUser = useCallback((u: string) => adminAction('approve', u), [adminAction]);
+  const rejectUser = useCallback((u: string) => adminAction('reject', u), [adminAction]);
+  const deleteUser = useCallback(
+    (u: string) =>
+      u.trim().toLowerCase() === SUPER_ADMIN_USERNAME
+        ? Promise.resolve({ success: false, message: 'The Super Admin account cannot be deleted.' })
+        : adminAction('delete', u),
+    [adminAction]
+  );
+
+  const pendingCount = users.filter((u) => u.status === 'pending').length;
+
+  const login = async (identifier: string, inputPassword: string): Promise<LoginResult> => {
+    try {
+      const { data } = await moonFetch('/api/accounts/login', {
+        body: { identifier: identifier.trim(), password: inputPassword },
+      });
+      if (data?.success && data.token && data.user) {
+        applySession(data.user, data.token);
+        const isAdmin = data.user.role === 'admin';
+        return {
+          success: true,
+          status: 'approved',
+          message: isAdmin
+            ? 'Welcome Isaac Faleh (Super Administrator)!'
+            : `Welcome ${data.user.username} from ${data.user.institution || 'Tester Group'}!`,
+        };
+      }
+      return {
+        success: false,
+        status: data?.status || 'unknown',
+        message:
+          data?.message ||
+          'Account not found or password incorrect. New testers can register under the "Request Access" tab.',
+      };
+    } catch {
+      return { success: false, status: 'unknown', message: NETWORK_ERROR };
+    }
   };
 
   const signup = async (
     dataOrUsername: SignupData | string,
     legacyPassword?: string
   ): Promise<SignupResult> => {
-    let usernameVal = '';
-    let emailVal = '';
-    let institutionVal = '';
-    let passwordVal = '';
-    let inviteCodeVal = '';
+    const data: SignupData =
+      typeof dataOrUsername === 'string'
+        ? {
+            username: dataOrUsername.trim(),
+            email: `${dataOrUsername.trim()}@moon.local`,
+            institution: 'Tester Institution',
+            password: legacyPassword || '',
+          }
+        : dataOrUsername;
 
-    if (typeof dataOrUsername === 'string') {
-      usernameVal = dataOrUsername.trim();
-      passwordVal = legacyPassword || '';
-      emailVal = `${usernameVal}@moon.local`;
-      institutionVal = 'Tester Institution';
-    } else {
-      usernameVal = dataOrUsername.username.trim();
-      emailVal = dataOrUsername.email.trim();
-      institutionVal = dataOrUsername.institution.trim();
-      passwordVal = dataOrUsername.password;
-      inviteCodeVal = (dataOrUsername.inviteCode || '').trim();
-    }
+    const usernameVal = data.username.trim();
+    const emailVal = data.email.trim();
+    const institutionVal = data.institution.trim();
 
-    if (!usernameVal) {
-      return { success: false, message: 'Username is required.' };
-    }
-    if (!emailVal || !emailVal.includes('@')) {
-      return { success: false, message: 'A valid email address is required.' };
-    }
-    if (!institutionVal) {
-      return { success: false, message: 'Institution or Organization is required.' };
-    }
-    if (passwordVal.length < 6) {
-      return { success: false, message: 'Password must be at least 6 characters.' };
-    }
+    if (!usernameVal) return { success: false, message: 'Username is required.' };
+    if (!emailVal || !emailVal.includes('@')) return { success: false, message: 'A valid email address is required.' };
+    if (!institutionVal) return { success: false, message: 'Institution or Organization is required.' };
+    if (data.password.length < 6) return { success: false, message: 'Password must be at least 6 characters.' };
 
-    const currentList = loadStoredUsers();
-
-    // Check duplicate
-    const exists = currentList.find(
-      (u) =>
-        u.username.toLowerCase() === usernameVal.toLowerCase() ||
-        u.email.toLowerCase() === emailVal.toLowerCase()
-    );
-
-    if (exists) {
-      return {
-        success: false,
-        message: 'A tester with this username or email already exists.',
-      };
-    }
-
-    // Determine status: If VIP code provided, auto-approve; otherwise requires Isaac's approval!
-    const cleanInvite = inviteCodeVal.trim().toLowerCase().replace(/[\s\-_]/g, '');
-    const isVip =
-      cleanInvite === 'wolfmoonalqamiisaac' ||
-      cleanInvite === 'moon2026' ||
-      cleanInvite === 'isaac' ||
-      cleanInvite === 'vip';
-
-    const status: 'pending' | 'approved' = isVip ? 'approved' : 'pending';
-
-    const newUser: AuthUser = {
-      username: usernameVal,
-      email: emailVal,
-      institution: institutionVal,
-      role: 'tester',
-      status,
-      password: passwordVal,
-      registeredAt: new Date().toISOString(),
-      ...(isVip ? { approvedAt: new Date().toISOString() } : {}),
-    };
-
-    const nextList = [newUser, ...currentList];
-    saveStoredUsers(nextList);
-    setUsersList(nextList);
-
-    // Persist tester account to backend folio-sync-store
     try {
-      await fetch('/api/accounts/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const { data: res } = await moonFetch('/api/accounts/register', {
+        body: {
           username: usernameVal,
           email: emailVal,
           institution: institutionVal,
-          password: passwordVal,
-          inviteCode: inviteCodeVal,
-        }),
+          password: data.password,
+          inviteCode: (data.inviteCode || '').trim(),
+        },
       });
-    } catch (e) {
-      console.warn('Backend register sync error:', e);
-    }
-
-    if (status === 'approved') {
+      if (!res?.success) {
+        return { success: false, message: res?.message || 'Registration failed. Please try again.' };
+      }
+      if (res.status === 'approved') {
+        return {
+          success: true,
+          status: 'approved',
+          message: 'Account approved with VIP code! You can now log in immediately.',
+        };
+      }
       return {
         success: true,
-        status: 'approved',
-        message: 'Account approved with VIP code! You can now log in immediately.',
+        status: 'pending',
+        message: `Request received for ${usernameVal} (${institutionVal}). Your account is pending administrator approval (Isaac Faleh). Try signing in again once it has been approved.`,
       };
+    } catch {
+      return { success: false, message: NETWORK_ERROR };
     }
-
-    return {
-      success: true,
-      status: 'pending',
-      message: `Request received for ${usernameVal} (${institutionVal}). Your account is pending administrator approval (Isaac Faleh). You will be notified once approved.`,
-    };
   };
 
   const logout = () => {
-    setIsAuthenticated(false);
-    setUsername(null);
-    setUser(null);
-    setAccessToken(null);
-    try {
-      localStorage.removeItem(STORAGE_AUTH_KEY);
-      console.log('Session cleared');
-    } catch (error) {
-      console.error('Error clearing session:', error);
+    const token = accessToken;
+    if (token) {
+      moonFetch('/api/accounts/logout', { body: {}, sessionToken: token }).catch(() => {});
     }
+    unlockedAdminToken.current = null;
+    clearSession();
   };
 
   return (
     <AuthContext.Provider
       value={{
         isAuthenticated,
+        isSuperAdmin,
         username,
         user,
         accessToken,
         login,
         signup,
         logout,
+        users,
+        usersLoading,
+        usersError,
         getUsers,
+        refreshUsers,
+        unlockAdmin,
         approveUser,
         rejectUser,
         deleteUser,

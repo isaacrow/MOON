@@ -20,6 +20,7 @@ import {
   Users,
   Clock,
   CheckCircle,
+  CheckCircle2,
   AlertCircle,
   BarChart3,
   Calendar,
@@ -99,7 +100,7 @@ interface RecentRecord {
   title: string;
   type: string;
   timestamp: Date;
-  status: 'complete' | 'draft' | 'needs-review';
+  status: 'complete' | 'draft' | 'needs-review' | 'pending-review';
   record?: BIBFRAMERecord;
 }
 
@@ -134,11 +135,13 @@ export function Dashboard({ onNavigate, onLoadRecord }: DashboardProps) {
       setSavedRecords(prev => prev.map(r => r.id === recordId ? {
         ...r,
         status: 'complete',
-        record: { ...r.record, metadata: { ...r.record?.metadata, status: 'complete' } }
+        record: { ...r.record, metadata: { ...r.record?.metadata, status: 'complete' } as any }
       } : r));
     } catch (err) {
       console.error('Failed to approve record:', err);
-      toast.error('Failed to approve record');
+      toast.error('Failed to approve record', {
+        description: err instanceof Error ? err.message : undefined,
+      });
     }
   };
 
