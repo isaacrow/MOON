@@ -339,12 +339,23 @@ export default function WolfMoon({
 
   // ===== GLASS THEME =====
   // ===== 3D BACKGROUND TOGGLE =====
+  type StudioBgColor = "black" | "gray" | "white";
   const [show3dBackground, setShow3dBackground] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem("moon_wolf_3d_bg");
       return stored !== null ? stored === "true" : true;
     } catch {
       return true;
+    }
+  });
+
+  const [studioBgColor, setStudioBgColor] = useState<StudioBgColor>(() => {
+    try {
+      const stored = localStorage.getItem("moon_wolf_bg_color") as StudioBgColor;
+      if (stored === "black" || stored === "gray" || stored === "white") return stored;
+      return "black";
+    } catch {
+      return "black";
     }
   });
 
@@ -363,7 +374,7 @@ export default function WolfMoon({
   const gradientClass = glassTheme === "legacy" ? "animated-gradient-bg" : glassTheme === "classic" ? "" : "animated-gradient-bg-blue";
   const isLegacy = glassTheme === "legacy";
   const isClassic = glassTheme === "classic";
-  const isLight = isLegacy || isClassic; // any light theme
+  const isLight = isLegacy || isClassic || (!show3dBackground && studioBgColor === "white"); // any light theme
   const hasGlass = isLegacy; // only legacy uses frosted glass blur
   const glassElBg = isClassic ? "#f9fafb" : isLegacy ? "rgba(255,255,255,0.6)" : "rgba(30,41,59,0.5)";
   const glassElBorder = isClassic ? "1px solid #e5e7eb" : isLegacy ? "1px solid rgba(255,255,255,0.5)" : "1px solid rgba(59,130,246,0.08)";
@@ -1233,9 +1244,13 @@ export default function WolfMoon({
         />
       ) : (
         <div
-          className="fixed inset-0 z-0 pointer-events-none"
+          className="fixed inset-0 z-0 pointer-events-none transition-colors duration-300"
           style={{
-            background: 'radial-gradient(ellipse at 50% 0%, #1e293b 0%, #0f172a 50%, #020617 100%)',
+            background: studioBgColor === "white"
+              ? "#ffffff"
+              : studioBgColor === "gray"
+              ? "#666666"
+              : "#000000",
           }}
         />
       )}
@@ -1246,27 +1261,27 @@ export default function WolfMoon({
       <header
         className="relative z-20 px-6 pt-3 pb-4 glass-luxury-panel m-3 mb-0 rounded-2xl"
       >
-        {/* ===== ROW 1: BRANDING (BLUE) — TOP DYNAMIC NOTCH — IRAQI FINDER (RED WITH MOON LOGO) ===== */}
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 -mt-3 mb-3 flex-wrap">
+        {/* ===== ROW 1: BRANDING (LEFT) — DYNAMIC NOTCH (CENTER) — FINDER & CONTROLS (RIGHT) ===== */}
+        <div className="relative max-w-7xl mx-auto flex items-center justify-between gap-3 -mt-3 mb-3 min-h-[44px]">
           {/* Blue Circle (Left): Back Button & MOON Studio Logo */}
-          <div className="flex items-center gap-3.5">
+          <div className="flex items-center gap-3 shrink-0 z-10">
             {onBack && (
               <button
                 type="button"
                 onClick={onBack}
-                className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-2 px-4 py-2 text-xs font-bold text-white cursor-pointer shadow-xl"
+                className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white cursor-pointer shadow-xl"
                 title="Return to Dashboard"
               >
-                <Home className="h-4 w-4 text-white drop-shadow" />
+                <Home className="h-3.5 w-3.5 text-white drop-shadow" />
                 <span className="text-xs font-bold">{t("back") || "Dashboard"}</span>
               </button>
             )}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2.5">
               <div className="relative flex items-center justify-center">
-                <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-9 w-auto object-contain drop-shadow-lg" />
+                <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-8 w-auto object-contain drop-shadow-lg" />
               </div>
               <div>
-                <h1 className="text-lg font-black tracking-tight flex items-center gap-2 text-white">
+                <h1 className="text-base font-black tracking-tight flex items-center gap-1.5 text-white">
                   <span>MOON</span>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 border border-white/30 text-white font-bold uppercase tracking-wider">
                     Studio
@@ -1276,31 +1291,31 @@ export default function WolfMoon({
             </div>
           </div>
 
-          {/* Center: The Dynamic Notch */}
-          <div className="flex justify-center">
+          {/* Green Circle (Center): The Dynamic Notch - Perfectly Centered */}
+          <div className="hidden lg:flex absolute left-1/2 -translate-x-1/2 top-0 justify-center pointer-events-auto z-20">
             <div
-              className="liquid-glass-notch flex items-center gap-3.5 px-6 py-2 transition-all shadow-2xl"
+              className="liquid-glass-notch flex items-center gap-3 px-4 py-1.5 transition-all shadow-2xl"
             >
               {/* Institutional Score Badge */}
               {institutionalValidation && (
                 <div
-                  className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black transition-all"
+                  className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-black transition-all"
                   style={{
                     background: institutionalValidation.score >= 85 ? "rgba(52, 211, 153, 0.22)" : institutionalValidation.score >= 50 ? "rgba(251, 191, 36, 0.22)" : "rgba(248, 113, 113, 0.22)",
                     color: institutionalValidation.score >= 85 ? "#34d399" : institutionalValidation.score >= 50 ? "#fbbf24" : "#f87171",
                     border: `1px solid ${institutionalValidation.score >= 85 ? "rgba(52, 211, 153, 0.45)" : institutionalValidation.score >= 50 ? "rgba(251, 191, 36, 0.45)" : "rgba(248, 113, 113, 0.45)"}`,
                   }}
                 >
-                  <Shield className="h-3.5 w-3.5 animate-pulse" />
+                  <Shield className="h-3 w-3 animate-pulse" />
                   <span>{getValidationBadge(institutionalValidation)} ({institutionalValidation.score}/100)</span>
                 </div>
               )}
 
               {/* Vertical Divider */}
-              <div className="h-4 w-px bg-white/25" />
+              <div className="h-3.5 w-px bg-white/25" />
 
               {/* Live Graph Metrics */}
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-nowrap">
                 {[
                   { icon: <Database className="h-3 w-3 text-cyan-300" />, label: `${graphStats.nodeCount} ${t("nodes")}` },
                   { icon: <Network className="h-3 w-3 text-purple-300" />, label: `${tripleCount} ${t("triples")}` },
@@ -1313,7 +1328,7 @@ export default function WolfMoon({
                 ].map((stat, i) => (
                   <span
                     key={i}
-                    className="flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-bold transition-all"
+                    className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold transition-all"
                     style={{
                       background: 'rgba(255, 255, 255, 0.12)',
                       border: '1px solid rgba(255, 255, 255, 0.22)',
@@ -1328,29 +1343,67 @@ export default function WolfMoon({
             </div>
           </div>
 
-          {/* Red Circle (Right): Iraqi Authority Finder + Language Toggle */}
-          <div className="flex items-center justify-end gap-2">
+          {/* Red Circle (Right): Iraqi Authority Finder + 3D Toggle + Language Toggle */}
+          <div className="flex items-center justify-end gap-1.5 shrink-0 z-10">
             <button
               type="button"
               onClick={() => setShowIraqiAuthorityModal(true)}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-2 px-4 py-2 text-xs font-black text-white cursor-pointer shadow-xl"
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3 py-1.5 text-xs font-black text-white cursor-pointer shadow-xl"
             >
-              <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-4 w-auto object-contain drop-shadow" />
+              <img src={isLight ? moonLogoBlack : moonLogoWhite} alt="Moon Logo" className="h-3.5 w-auto object-contain drop-shadow" />
               <span>IQ Iraqi Authority Finder</span>
             </button>
             <button
               type="button"
               onClick={toggle3dBackground}
-              className={`glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3 py-2 text-xs font-bold cursor-pointer ${show3dBackground ? 'text-cyan-300' : 'text-white/60'}`}
+              className={`glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold cursor-pointer ${show3dBackground ? 'text-cyan-300' : 'text-white/60'}`}
               title={show3dBackground ? (language === "ar" ? "إيقاف الخلفية ثلاثية الأبعاد (3D)" : "Turn 3D background OFF") : (language === "ar" ? "تشغيل الخلفية ثلاثية الأبعاد (3D)" : "Turn 3D background ON")}
             >
               <Box className={`h-3.5 w-3.5 ${show3dBackground ? 'text-cyan-300' : 'text-white/40'}`} />
               <span>{show3dBackground ? (language === "ar" ? "3D مفعّل" : "3D ON") : (language === "ar" ? "3D معطّل" : "3D OFF")}</span>
             </button>
+
+            {/* Background Color Swatches (When 3D is OFF: Black #000000, Gray #666666, White #FFFFFF) */}
+            {!show3dBackground && (
+              <div
+                className="glass-bubble-pill flex items-center gap-1.5 px-2 py-1 shrink-0 shadow-lg"
+                title={language === "ar" ? "اختيار لون الخلفية: أسود / رمادي / أبيض" : "Background: Black / Gray / White"}
+              >
+                {([
+                  { id: "black" as const, hex: "#000000", labelAr: "أسود", labelEn: "Black" },
+                  { id: "gray" as const, hex: "#666666", labelAr: "رمادي", labelEn: "Gray" },
+                  { id: "white" as const, hex: "#ffffff", labelAr: "أبيض", labelEn: "White" },
+                ]).map(c => {
+                  const isActive = studioBgColor === c.id;
+                  return (
+                    <button
+                      type="button"
+                      key={c.id}
+                      onClick={() => {
+                        setStudioBgColor(c.id);
+                        try { localStorage.setItem("moon_wolf_bg_color", c.id); } catch {}
+                      }}
+                      className={`w-5 h-5 rounded-full transition-all cursor-pointer flex items-center justify-center ${
+                        isActive ? "ring-2 ring-cyan-400 scale-110 shadow-md" : "opacity-60 hover:opacity-100 hover:scale-105"
+                      }`}
+                      style={{
+                        backgroundColor: c.hex,
+                        border: c.id === "white" ? "1px solid rgba(0,0,0,0.35)" : "1px solid rgba(255,255,255,0.45)"
+                      }}
+                      title={`${c.id === "white" ? "#FFFFFF" : c.id === "gray" ? "#666666" : "#000000"} (${language === "ar" ? c.labelAr : c.labelEn})`}
+                    >
+                      {isActive && (
+                        <div className={`w-1.5 h-1.5 rounded-full ${c.id === "white" ? "bg-black" : "bg-white"}`} />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <button
               type="button"
               onClick={toggleLanguage}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold cursor-pointer"
+              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold cursor-pointer"
             >
               <Globe className="h-3.5 w-3.5 text-cyan-300" />
               <span>{language === "en" ? "عربي" : "EN"}</span>
@@ -1358,107 +1411,101 @@ export default function WolfMoon({
           </div>
         </div>
 
-        {/* ===== ROW 2: TEMPLATES & RECORD CONTROLS (UNIFIED WITH DIVIDER LINE) ===== */}
-        <div className="max-w-7xl mx-auto flex items-center justify-center gap-2.5 flex-wrap pt-2.5 pb-2 border-t border-white/10">
-          {/* Templates Section */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[11px] font-bold text-white/60 uppercase tracking-wider mr-1">
-              Templates:
-            </span>
-            {getAllTemplates().map(tmpl => {
-              const isSelected = selectedTemplate === tmpl.id;
-              return (
-                <button
-                  type="button"
-                  key={tmpl.id}
-                  onClick={() => setSelectedTemplate(tmpl.id)}
-                  className={`glass-bubble-pill flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold transition-all duration-200 cursor-pointer ${
-                    isSelected
-                      ? "bg-white/35 border-white text-white shadow-xl scale-[1.02] ring-1 ring-white/50"
-                      : "text-white/85 hover:text-white hover:bg-white/20 border-white/20"
-                  }`}
-                >
-                  {TEMPLATE_ICONS[tmpl.id]}
-                  <span>{tmpl.name}</span>
-                </button>
-              );
-            })}
+        {/* ===== ROW 2: TEMPLATES & RECORD CONTROLS (UNIFIED ON A SINGLE LINE WITH DIVIDER) ===== */}
+        <div className="max-w-7xl mx-auto flex items-center justify-center gap-1.5 flex-nowrap overflow-x-auto scrollbar-none pt-2 pb-1.5 border-t border-white/10">
+          <span className="text-[11px] font-bold text-white/60 uppercase tracking-wider mr-1 shrink-0">
+            Templates:
+          </span>
+          {getAllTemplates().map(tmpl => {
+            const isSelected = selectedTemplate === tmpl.id;
+            return (
+              <button
+                type="button"
+                key={tmpl.id}
+                onClick={() => setSelectedTemplate(tmpl.id)}
+                className={`glass-bubble-pill flex items-center gap-1.5 px-3 py-1 text-xs font-bold transition-all duration-200 cursor-pointer shrink-0 ${
+                  isSelected
+                    ? "bg-white/35 border-white text-white shadow-xl scale-[1.02] ring-1 ring-white/50"
+                    : "text-white/85 hover:text-white hover:bg-white/20 border-white/20"
+                }`}
+              >
+                {TEMPLATE_ICONS[tmpl.id]}
+                <span>{tmpl.name}</span>
+              </button>
+            );
+          })}
+
+          {/* Divider Line (The "line between them") */}
+          <div className="h-5 w-px bg-white/30 mx-1.5 shrink-0" />
+
+          {/* Record Title input with Save Status indicator */}
+          <div className="flex items-center gap-1.5 glass-bubble-pill px-2.5 py-1 text-xs shrink-0">
+            <BMSaveStatus status={saveStatus} />
+            <input
+              type="text"
+              value={recordTitle}
+              onChange={(e) => { setRecordTitle(e.target.value); setSaveStatus("unsaved"); }}
+              className="bg-transparent text-xs font-bold focus:outline-none placeholder-white/50 text-white w-28 sm:w-32"
+              placeholder={t("recordTitle")}
+            />
           </div>
 
-          {/* Divider Line Between Them */}
-          <div className="h-6 w-px bg-white/30 mx-1.5 shrink-0 hidden md:block" />
+          {/* Save Button */}
+          <button
+            type="button"
+            onClick={handleSave}
+            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-3 py-1 text-xs font-black text-white cursor-pointer shadow-xl shrink-0"
+          >
+            <Save className="h-3 w-3 text-emerald-300 drop-shadow" />
+            <span>{t("save")}</span>
+          </button>
 
-          {/* Record Actions & Controls */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Record Title input with Save Status indicator */}
-            <div className="flex items-center gap-1.5 glass-bubble-pill px-3 py-1.5 text-xs">
-              <BMSaveStatus status={saveStatus} />
-              <input
-                type="text"
-                value={recordTitle}
-                onChange={(e) => { setRecordTitle(e.target.value); setSaveStatus("unsaved"); }}
-                className="bg-transparent text-xs font-bold focus:outline-none placeholder-white/50 text-white w-36"
-                placeholder={t("recordTitle")}
-              />
-            </div>
+          {/* Reset Button */}
+          <button
+            type="button"
+            onClick={handleResetAll}
+            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-2.5 py-1 text-xs font-bold cursor-pointer text-rose-300 border-rose-400/30 hover:border-rose-400 shrink-0"
+          >
+            <RefreshCw className="h-3 w-3 text-rose-400" />
+            <span>{t("reset") || "Reset"}</span>
+          </button>
 
-            {/* Save Button */}
-            <button
-              type="button"
-              onClick={handleSave}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-black text-white cursor-pointer shadow-xl"
-            >
-              <Save className="h-3.5 w-3.5 text-emerald-300 drop-shadow" />
-              <span>{t("save")}</span>
-            </button>
+          {/* Import Button */}
+          <button
+            type="button"
+            onClick={() => setShowImportDialog(true)}
+            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-2.5 py-1 text-xs font-bold cursor-pointer text-white shrink-0"
+          >
+            <Upload className="h-3 w-3 text-cyan-300" />
+            <span>{t("import")}</span>
+          </button>
 
-            {/* Reset Button */}
-            <button
-              type="button"
-              onClick={handleResetAll}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold cursor-pointer text-rose-300 border-rose-400/30 hover:border-rose-400"
-            >
-              <RefreshCw className="h-3.5 w-3.5 text-rose-400" />
-              <span>{t("reset") || "Reset"}</span>
-            </button>
-
-            {/* Import Button */}
-            <button
-              type="button"
-              onClick={() => setShowImportDialog(true)}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold cursor-pointer text-white"
-            >
-              <Upload className="h-3.5 w-3.5 text-cyan-300" />
-              <span>{t("import")}</span>
-            </button>
-
-            {/* Field Manager (Restricted to Super Admin Isaac) */}
-            <button
-              type="button"
-              onClick={() => {
-                if (!isSuperAdmin) {
-                  toast.error(
-                    language === "ar"
-                      ? "عذراً، تخصيص القوالب مقتصر على المشرف العام (إسحاق) فقط."
-                      : "Access restricted: Custom templates are only accessible by Super Admin (Isaac)."
-                  );
-                  return;
-                }
-                setShowFieldManager(!showFieldManager);
-              }}
-              className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold cursor-pointer"
-              style={{
-                borderColor: hiddenFields.size > 0 ? "rgba(251,191,36,0.8)" : undefined,
-                color: hiddenFields.size > 0 ? "#fbbf24" : undefined,
-                opacity: isSuperAdmin ? 1 : 0.85,
-              }}
-              title={!isSuperAdmin ? (language === "ar" ? "مخصص للمشرف العام إسحاق فقط" : "Super Admin Isaac only") : undefined}
-            >
-              <Settings className="h-3.5 w-3.5" />
-              <span>{hiddenFields.size > 0 ? `${hiddenFields.size} ${t("fieldsHidden")}` : t("customTemplates")}</span>
-              {!isSuperAdmin && <Lock className="h-2.5 w-2.5 text-white/50" />}
-            </button>
-          </div>
+          {/* Field Manager (Restricted to Super Admin Isaac) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (!isSuperAdmin) {
+                toast.error(
+                  language === "ar"
+                    ? "عذراً، تخصيص القوالب مقتصر على المشرف العام (إسحاق) فقط."
+                    : "Access restricted: Custom templates are only accessible by Super Admin (Isaac)."
+                );
+                return;
+              }
+              setShowFieldManager(!showFieldManager);
+            }}
+            className="glass-bubble-pill hover:scale-105 active:scale-95 transition-all flex items-center gap-1 px-2.5 py-1 text-xs font-bold cursor-pointer shrink-0"
+            style={{
+              borderColor: hiddenFields.size > 0 ? "rgba(251,191,36,0.8)" : undefined,
+              color: hiddenFields.size > 0 ? "#fbbf24" : undefined,
+              opacity: isSuperAdmin ? 1 : 0.85,
+            }}
+            title={!isSuperAdmin ? (language === "ar" ? "مخصص للمشرف العام إسحاق فقط" : "Super Admin Isaac only") : undefined}
+          >
+            <Settings className="h-3 w-3" />
+            <span>{hiddenFields.size > 0 ? `${hiddenFields.size} ${t("fieldsHidden")}` : t("customTemplates")}</span>
+            {!isSuperAdmin && <Lock className="h-2.5 w-2.5 text-white/50" />}
+          </button>
         </div>
       </header>
 
