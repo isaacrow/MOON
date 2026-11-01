@@ -30,7 +30,7 @@ import {
   Building, MapPin, Tag, Newspaper, Archive, Shield, Hash, Activity,
   Copy, ExternalLink, Zap, Settings, RefreshCw, Plus, X, Info, Home,
   Moon, Star, Orbit, Waves, Fingerprint, Terminal, Languages, Scissors, Sun, Brain,
-  Sliders, ArrowRightLeft, QrCode, UserCheck, Replace, Columns, Maximize2, LayoutGrid, List
+  Sliders, ArrowRightLeft, QrCode, UserCheck, Replace, Columns, Maximize2, LayoutGrid, List, Lock
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import moonLogoWhite from "../../assets/white.png";
